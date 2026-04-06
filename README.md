@@ -11,9 +11,13 @@ uvx owui-cli models show gpt-4o
 uvx owui-cli schema knowledge
 ```
 
-## Status
+## Install
 
-Under construction. Coming soon to PyPI.
+```bash
+uvx owui-cli help            # run without installing
+uv tool install owui-cli     # or install globally
+pip install owui-cli          # or via pip
+```
 
 ## Auth
 
