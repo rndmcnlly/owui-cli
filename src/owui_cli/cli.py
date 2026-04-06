@@ -10,6 +10,7 @@ Commands:
 Use --json for machine-readable output on any command.
 """
 
+import base64
 import json
 import os
 import re
@@ -131,6 +132,34 @@ def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
     return meta, raw[fm.end():]
 
 
+def _write_file(path: str, content: str | bytes):
+    """Write content to a file, creating parent directories as needed."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    mode = "wb" if isinstance(content, bytes) else "w"
+    with open(path, mode) as f:
+        f.write(content)
+
+
+def _write_json(path: str, obj):
+    """Write JSON to a file, creating parent directories as needed."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def _extract_data_uri(data_uri: str) -> tuple[str, bytes] | None:
+    """Decode a data:image/*;base64,... URI. Returns (ext, bytes) or None."""
+    if not data_uri or not data_uri.startswith("data:image/"):
+        return None
+    header, _, b64data = data_uri.partition(",")
+    if not b64data:
+        return None
+    mime = header.split(";")[0].replace("data:", "")
+    ext = mime.split("/")[1] if "/" in mime else "png"
+    return ext, base64.b64decode(b64data)
+
+
 def _slugify(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", title.lower(), "").strip("_") if not title else re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
 
@@ -162,6 +191,7 @@ class Resource:
         self._commands["show"] = (self.cmd_show, "<id>", (1, 1))
         self._commands["deploy"] = (self.cmd_deploy, f"<source{self.deploy_ext}> [id]", (1, 2))
         self._commands["pull"] = (self.cmd_pull, "<id>", (1, 1))
+        self._commands["pull-all"] = (self.cmd_pull_all, "[dir]", (0, 1))
         self._commands["delete"] = (self.cmd_delete, "<id>", (1, 1))
 
     def add_command(self, name, fn, arg_spec, arg_range):
@@ -281,6 +311,36 @@ class Resource:
         if content and not content.endswith("\n"):
             sys.stdout.write("\n")
 
+    def cmd_pull_all(self, url: str, token: str, out_dir: str = "."):
+        """Pull all items into <out_dir>/<id>/source + <out_dir>/<id>/meta.json."""
+        src_name = {"tools": "tool.py", "functions": "function.py", "skills": "skill.md"}.get(self.name, "source")
+        with httpx.Client(timeout=TIMEOUT) as c:
+            data = _get(c, url, f"{self.prefix}/", token).json()
+        items = data if isinstance(data, list) else data.get("items", data.get("data", []))
+        ids = sorted(item.get("id", "") for item in items)
+        if not ids:
+            out("(none)")
+            return
+        count = 0
+        with httpx.Client(timeout=TIMEOUT) as c:
+            for item_id in ids:
+                r = c.get(_api(url, self.item_path(item_id)), headers=_headers(token))
+                if r.status_code == 404:
+                    print(f"  skip {item_id} (not found)", file=sys.stderr)
+                    continue
+                r.raise_for_status()
+                item = r.json()
+                item_dir = os.path.join(out_dir, item_id)
+                # Write source
+                content = item.pop(self.content_key, "")
+                _write_file(os.path.join(item_dir, src_name), content if content.endswith("\n") else content + "\n")
+                # Write metadata (everything except source content)
+                _write_json(os.path.join(item_dir, "meta.json"), item)
+                count += 1
+                if not JSON_OUTPUT:
+                    print(f"  {item_id}")
+        out(f"pulled {count} {self.name}")
+
     def cmd_delete(self, url: str, token: str, item_id: str):
         with httpx.Client(timeout=TIMEOUT) as c:
             r = c.get(_api(url, self.item_path(item_id)), headers=_headers(token))
@@ -355,6 +415,36 @@ class SkillsResource(Resource):
         sys.stdout.write(content)
         if content and not content.endswith("\n"):
             sys.stdout.write("\n")
+
+    def cmd_pull_all(self, url: str, token: str, out_dir: str = "."):
+        """Pull all skills into <out_dir>/<id>/skill.md (with frontmatter) + meta.json."""
+        with httpx.Client(timeout=TIMEOUT) as c:
+            data = _get(c, url, f"{self.prefix}/", token).json()
+        items = data if isinstance(data, list) else data.get("items", data.get("data", []))
+        ids = sorted(item.get("id", "") for item in items)
+        if not ids:
+            out("(none)")
+            return
+        count = 0
+        with httpx.Client(timeout=TIMEOUT) as c:
+            for item_id in ids:
+                r = c.get(_api(url, self.item_path(item_id)), headers=_headers(token))
+                if r.status_code == 404:
+                    print(f"  skip {item_id} (not found)", file=sys.stderr)
+                    continue
+                r.raise_for_status()
+                item = r.json()
+                item_dir = os.path.join(out_dir, item_id)
+                # Write skill.md with frontmatter
+                content = item.pop("content", "")
+                fm = f"---\nid: {item_id}\nname: {item.get('name','')}\ndescription: {item.get('description','')}\n---\n"
+                _write_file(os.path.join(item_dir, "skill.md"), fm + content + ("" if content.endswith("\n") else "\n"))
+                # Write metadata
+                _write_json(os.path.join(item_dir, "meta.json"), item)
+                count += 1
+                if not JSON_OUTPUT:
+                    print(f"  {item_id}")
+        out(f"pulled {count} skills")
 
     def cmd_toggle(self, url: str, token: str, skill_id: str):
         with httpx.Client(timeout=TIMEOUT) as c:
@@ -439,6 +529,51 @@ def models_delete(url, token, model_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, "/api/v1/models/model/delete", token, {"id": model_id})
     out(f"deleted {model_id}")
+
+
+def models_pull_all(url, token, out_dir="."):
+    """Pull all workspace models into <out_dir>/<id>/model.json, extracting profile images."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        data = _get(c, url, "/api/v1/models", token).json().get("data", [])
+
+    # Filter to workspace models: those with a base_model_id in their info
+    # (raw connection proxies have no info or no base_model_id)
+    workspace = []
+    for m in data:
+        info = m.get("info") or {}
+        base = info.get("base_model_id", "")
+        if base:
+            workspace.append(m)
+
+    if not workspace:
+        out("(no workspace models)")
+        return
+
+    count = 0
+    with httpx.Client(timeout=TIMEOUT) as c:
+        for m in sorted(workspace, key=lambda m: m.get("id", "")):
+            model_id = m.get("id", "")
+            # Fetch full model data
+            r = _get(c, url, f"/api/v1/models/model?id={model_id}", token)
+            model = r.json()
+            model_dir = os.path.join(out_dir, model_id)
+
+            # Extract profile image from data URI (top-level meta, not info.meta)
+            top_meta = model.get("meta") or {}
+            img_url = top_meta.get("profile_image_url", "")
+            extracted = _extract_data_uri(img_url)
+            if extracted:
+                ext, img_bytes = extracted
+                _write_file(os.path.join(model_dir, f"profile.{ext}"), img_bytes)
+                top_meta["profile_image_url"] = f"profile.{ext}"
+
+            _write_json(os.path.join(model_dir, "model.json"), model)
+            count += 1
+            if not JSON_OUTPUT:
+                img_note = f" +profile.{ext}" if extracted else ""
+                print(f"  {model_id}{img_note}")
+
+    out(f"pulled {count} models")
 
 
 # ── knowledge (special: files subresource, file/remove is destructive) ─
@@ -872,6 +1007,7 @@ COMMANDS.update({
     ("models",    "create"):      (models_create,        "<model.json>",        (1, 1)),
     ("models",    "update"):      (models_update,        "<model.json>",        (1, 1)),
     ("models",    "delete"):      (models_delete,        "<id>",                (1, 1)),
+    ("models",    "pull-all"):    (models_pull_all,      "[dir]",               (0, 1)),
     ("knowledge", "list"):        (knowledge_list,       "",                    (0, 0)),
     ("knowledge", "show"):        (knowledge_show,       "<id>",                (1, 1)),
     ("knowledge", "files"):       (knowledge_files,      "<id>",                (1, 1)),
