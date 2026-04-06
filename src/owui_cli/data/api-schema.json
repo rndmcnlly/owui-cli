@@ -1,0 +1,1615 @@
+{
+  "_meta": {
+    "source": "open-webui/open-webui main branch",
+    "extracted": "2026-04-05",
+    "auth_levels": {
+      "A": "admin",
+      "V": "verified user",
+      "C": "any authenticated",
+      "N": "no auth"
+    },
+    "format": "[METHOD, path, auth, body_or_null, description]"
+  },
+  "configs": {
+    "prefix": "/api/v1/configs",
+    "endpoints": [
+      [
+        "POST",
+        "/import",
+        "A",
+        "{config:dict}",
+        "Import full config"
+      ],
+      [
+        "GET",
+        "/export",
+        "A",
+        null,
+        "Export full config"
+      ],
+      [
+        "GET",
+        "/connections",
+        "A",
+        null,
+        "Get direct-connection settings"
+      ],
+      [
+        "POST",
+        "/connections",
+        "A",
+        "{ENABLE_DIRECT_CONNECTIONS:bool,ENABLE_BASE_MODELS_CACHE:bool}",
+        "Set direct-connection settings"
+      ],
+      [
+        "POST",
+        "/oauth/clients/register",
+        "A",
+        "{url,client_id,client_name?,client_secret?}",
+        "Register OAuth client"
+      ],
+      [
+        "GET",
+        "/tool_servers",
+        "A",
+        null,
+        "Get tool server config"
+      ],
+      [
+        "POST",
+        "/tool_servers",
+        "A",
+        "{tool_servers:[{url,path,type?,auth_type?,key?,config?}]}",
+        "Set tool server config"
+      ],
+      [
+        "POST",
+        "/tool_servers/verify",
+        "A",
+        "{url,path,type?,auth_type?,key?}",
+        "Verify tool server"
+      ],
+      [
+        "GET",
+        "/terminal_servers",
+        "A",
+        null,
+        "Get terminal server config"
+      ],
+      [
+        "POST",
+        "/terminal_servers",
+        "A",
+        "{terminal_servers:[{url,path?,key?,auth_type?}]}",
+        "Set terminal server config"
+      ],
+      [
+        "GET",
+        "/code_execution",
+        "A",
+        null,
+        "Get code execution config"
+      ],
+      [
+        "POST",
+        "/code_execution",
+        "A",
+        "{ENABLE_CODE_EXECUTION:bool,CODE_EXECUTION_ENGINE:str,...}",
+        "Set code execution config"
+      ],
+      [
+        "GET",
+        "/models/defaults",
+        "V",
+        null,
+        "Get default model metadata"
+      ],
+      [
+        "GET",
+        "/models",
+        "A",
+        null,
+        "Get model config (defaults, order, pinned)"
+      ],
+      [
+        "POST",
+        "/models",
+        "A",
+        "{DEFAULT_MODELS?,MODEL_ORDER_LIST?,DEFAULT_MODEL_METADATA?,DEFAULT_MODEL_PARAMS?}",
+        "Set model config"
+      ],
+      [
+        "POST",
+        "/suggestions",
+        "A",
+        "{suggestions:[{title:[str],content:str}]}",
+        "Set default prompt suggestions"
+      ],
+      [
+        "POST",
+        "/banners",
+        "A",
+        "{banners:[...]}",
+        "Set banners"
+      ],
+      [
+        "GET",
+        "/banners",
+        "V",
+        null,
+        "Get banners"
+      ]
+    ]
+  },
+  "groups": {
+    "prefix": "/api/v1/groups",
+    "note": "Item endpoints use /id/{id}, not /{id}",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List groups"
+      ],
+      [
+        "POST",
+        "/create",
+        "A",
+        "{name,description?,permissions?,data?}",
+        "Create group"
+      ],
+      [
+        "GET",
+        "/id/{id}",
+        "A",
+        null,
+        "Get group"
+      ],
+      [
+        "GET",
+        "/id/{id}/info",
+        "V",
+        null,
+        "Get group info (public)"
+      ],
+      [
+        "GET",
+        "/id/{id}/export",
+        "A",
+        null,
+        "Export group with user_ids"
+      ],
+      [
+        "POST",
+        "/id/{id}/users",
+        "A",
+        null,
+        "List group members"
+      ],
+      [
+        "POST",
+        "/id/{id}/update",
+        "A",
+        "{name,description?,permissions?}",
+        "Update group"
+      ],
+      [
+        "POST",
+        "/id/{id}/users/add",
+        "A",
+        "{user_ids:[str]}",
+        "Add users to group"
+      ],
+      [
+        "POST",
+        "/id/{id}/users/remove",
+        "A",
+        "{user_ids:[str]}",
+        "Remove users from group"
+      ],
+      [
+        "DELETE",
+        "/id/{id}/delete",
+        "A",
+        null,
+        "Delete group"
+      ]
+    ]
+  },
+  "chats": {
+    "prefix": "/api/v1/chats",
+    "note": "Conversations are trees (parentId/childrenIds), not flat. chat.history.messages is the full tree.",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List user's chats (page?,include_pinned?,include_folders?)"
+      ],
+      [
+        "GET",
+        "/search",
+        "V",
+        null,
+        "Search chats (text,page?)"
+      ],
+      [
+        "GET",
+        "/pinned",
+        "V",
+        null,
+        "Get pinned chats"
+      ],
+      [
+        "GET",
+        "/all",
+        "V",
+        null,
+        "Get all user's chats (full)"
+      ],
+      [
+        "GET",
+        "/all/archived",
+        "V",
+        null,
+        "Get archived chats"
+      ],
+      [
+        "GET",
+        "/all/tags",
+        "V",
+        null,
+        "Get all tags"
+      ],
+      [
+        "GET",
+        "/all/db",
+        "A",
+        null,
+        "Get ALL chats in DB (requires ENABLE_ADMIN_EXPORT)"
+      ],
+      [
+        "GET",
+        "/archived",
+        "V",
+        null,
+        "Archived chat list (page?,query?,order_by?,direction?)"
+      ],
+      [
+        "GET",
+        "/shared",
+        "V",
+        null,
+        "Shared chats list"
+      ],
+      [
+        "GET",
+        "/share/{share_id}",
+        "V",
+        null,
+        "Get shared chat"
+      ],
+      [
+        "GET",
+        "/folder/{folder_id}",
+        "V",
+        null,
+        "Get chats in folder"
+      ],
+      [
+        "GET",
+        "/stats/usage",
+        "V",
+        null,
+        "Chat usage stats"
+      ],
+      [
+        "GET",
+        "/stats/export",
+        "V",
+        null,
+        "Export chat stats (NDJSON stream or paginated)"
+      ],
+      [
+        "POST",
+        "/new",
+        "V",
+        "{chat:dict}",
+        "Create new chat"
+      ],
+      [
+        "POST",
+        "/import",
+        "V",
+        "{chats:[dict]}",
+        "Import chats"
+      ],
+      [
+        "POST",
+        "/archive/all",
+        "V",
+        null,
+        "Archive all chats"
+      ],
+      [
+        "POST",
+        "/tags",
+        "V",
+        "{name:str,skip?,limit?}",
+        "Get chats by tag"
+      ],
+      [
+        "GET",
+        "/{id}",
+        "V",
+        null,
+        "Get chat by ID"
+      ],
+      [
+        "POST",
+        "/{id}",
+        "V",
+        "{chat:dict}",
+        "Update chat"
+      ],
+      [
+        "DELETE",
+        "/{id}",
+        "V",
+        null,
+        "Delete chat"
+      ],
+      [
+        "POST",
+        "/{id}/pin",
+        "V",
+        null,
+        "Toggle pin"
+      ],
+      [
+        "POST",
+        "/{id}/clone",
+        "V",
+        "{title?}",
+        "Clone chat"
+      ],
+      [
+        "POST",
+        "/{id}/archive",
+        "V",
+        null,
+        "Toggle archive"
+      ],
+      [
+        "POST",
+        "/{id}/share",
+        "V",
+        null,
+        "Share chat"
+      ],
+      [
+        "DELETE",
+        "/{id}/share",
+        "V",
+        null,
+        "Unshare chat"
+      ],
+      [
+        "POST",
+        "/{id}/folder",
+        "V",
+        "{folder_id?}",
+        "Move to folder"
+      ],
+      [
+        "GET",
+        "/{id}/tags",
+        "V",
+        null,
+        "Get chat tags"
+      ],
+      [
+        "POST",
+        "/{id}/tags",
+        "V",
+        "{name:str}",
+        "Add tag"
+      ],
+      [
+        "DELETE",
+        "/{id}/tags",
+        "V",
+        "{name:str}",
+        "Delete tag"
+      ],
+      [
+        "GET",
+        "/list/user/{user_id}",
+        "A",
+        null,
+        "List another user's chats (requires ENABLE_ADMIN_CHAT_ACCESS)"
+      ]
+    ]
+  },
+  "prompts": {
+    "prefix": "/api/v1/prompts",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List all prompts"
+      ],
+      [
+        "GET",
+        "/tags",
+        "V",
+        null,
+        "Get prompt tags"
+      ],
+      [
+        "GET",
+        "/list",
+        "V",
+        null,
+        "Paginated prompt list (query?,view_option?,tag?,order_by?,direction?,page?)"
+      ],
+      [
+        "POST",
+        "/create",
+        "V",
+        "{command,title,content,access_control?,meta?}",
+        "Create prompt"
+      ],
+      [
+        "GET",
+        "/command/{command}",
+        "V",
+        null,
+        "Get prompt by slash command"
+      ],
+      [
+        "GET",
+        "/id/{id}",
+        "V",
+        null,
+        "Get prompt by ID"
+      ],
+      [
+        "POST",
+        "/id/{id}/update",
+        "V",
+        "{command,title,content}",
+        "Update prompt"
+      ],
+      [
+        "POST",
+        "/id/{id}/update/meta",
+        "V",
+        "{name,command,tags?}",
+        "Update name/command only"
+      ],
+      [
+        "POST",
+        "/id/{id}/update/version",
+        "V",
+        "{version_id:str}",
+        "Set active version"
+      ],
+      [
+        "POST",
+        "/id/{id}/access/update",
+        "V",
+        "{access_grants:[...]}",
+        "Update access grants"
+      ],
+      [
+        "POST",
+        "/id/{id}/toggle",
+        "V",
+        null,
+        "Toggle active"
+      ],
+      [
+        "DELETE",
+        "/id/{id}/delete",
+        "V",
+        null,
+        "Delete prompt"
+      ],
+      [
+        "GET",
+        "/id/{id}/history",
+        "V",
+        null,
+        "Get version history (page?)"
+      ],
+      [
+        "GET",
+        "/id/{id}/history/{history_id}",
+        "V",
+        null,
+        "Get specific version"
+      ],
+      [
+        "DELETE",
+        "/id/{id}/history/{history_id}",
+        "V",
+        null,
+        "Delete history entry"
+      ],
+      [
+        "GET",
+        "/id/{id}/history/diff",
+        "V",
+        null,
+        "Diff two versions (from_id,to_id)"
+      ]
+    ]
+  },
+  "users": {
+    "prefix": "/api/v1/users",
+    "note": "Pagination: page param (1-indexed, fixed size 30). skip/limit ignored.",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "A",
+        null,
+        "Paginated user list (query?,order_by?,direction?,page?)"
+      ],
+      [
+        "GET",
+        "/all",
+        "A",
+        null,
+        "All users (info only)"
+      ],
+      [
+        "GET",
+        "/search",
+        "V",
+        null,
+        "Search users (query?,page?)"
+      ],
+      [
+        "GET",
+        "/groups",
+        "V",
+        null,
+        "Get session user's groups"
+      ],
+      [
+        "GET",
+        "/permissions",
+        "V",
+        null,
+        "Get session user's resolved permissions"
+      ],
+      [
+        "GET",
+        "/default/permissions",
+        "A",
+        null,
+        "Get default permission template"
+      ],
+      [
+        "POST",
+        "/default/permissions",
+        "A",
+        "{workspace:{...},sharing:{...},chat:{...},features:{...},...}",
+        "Set default permissions"
+      ],
+      [
+        "GET",
+        "/user/settings",
+        "V",
+        null,
+        "Get own settings"
+      ],
+      [
+        "POST",
+        "/user/settings/update",
+        "V",
+        "{ui:dict,...}",
+        "Update own settings"
+      ],
+      [
+        "GET",
+        "/{user_id}",
+        "A",
+        null,
+        "Get user by ID"
+      ],
+      [
+        "POST",
+        "/{user_id}/update",
+        "A",
+        "{name?,email?,role?,profile_image_url?}",
+        "Update user"
+      ],
+      [
+        "DELETE",
+        "/{user_id}",
+        "A",
+        null,
+        "Delete user"
+      ],
+      [
+        "GET",
+        "/{user_id}/groups",
+        "A",
+        null,
+        "Get user's groups"
+      ]
+    ]
+  },
+  "auths": {
+    "prefix": "/api/v1/auths",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "C",
+        null,
+        "Get session user + refresh JWT"
+      ],
+      [
+        "POST",
+        "/signin",
+        "N",
+        "{email,password}",
+        "Sign in"
+      ],
+      [
+        "POST",
+        "/signup",
+        "N",
+        "{email,password,name,profile_image_url?}",
+        "Sign up"
+      ],
+      [
+        "GET",
+        "/signout",
+        "N",
+        null,
+        "Sign out"
+      ],
+      [
+        "POST",
+        "/add",
+        "A",
+        "{email,name,password,role?}",
+        "Add user (admin)"
+      ],
+      [
+        "POST",
+        "/update/profile",
+        "V",
+        "{name,profile_image_url?}",
+        "Update profile"
+      ],
+      [
+        "POST",
+        "/update/password",
+        "C",
+        "{password,new_password}",
+        "Change password"
+      ],
+      [
+        "POST",
+        "/api_key",
+        "C",
+        null,
+        "Generate API key"
+      ],
+      [
+        "GET",
+        "/api_key",
+        "C",
+        null,
+        "Get API key"
+      ],
+      [
+        "DELETE",
+        "/api_key",
+        "C",
+        null,
+        "Delete API key"
+      ],
+      [
+        "GET",
+        "/admin/details",
+        "C",
+        null,
+        "Get admin name/email"
+      ],
+      [
+        "GET",
+        "/admin/config",
+        "A",
+        null,
+        "Get admin config (signup, roles, JWT, etc.)"
+      ],
+      [
+        "POST",
+        "/admin/config",
+        "A",
+        "{SHOW_ADMIN_DETAILS,ENABLE_SIGNUP,DEFAULT_USER_ROLE,JWT_EXPIRES_IN,...}",
+        "Update admin config"
+      ]
+    ]
+  },
+  "models": {
+    "prefix": "/api/v1/models",
+    "note": "Uses /model?id= (not /{id}) to allow / in model IDs. Mutations use POST not DELETE.",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List models (includes base + custom)"
+      ],
+      [
+        "GET",
+        "/list",
+        "V",
+        null,
+        "Paginated model list (query?,view_option?,tag?,page?)"
+      ],
+      [
+        "GET",
+        "/base",
+        "A",
+        null,
+        "Get base models only"
+      ],
+      [
+        "GET",
+        "/tags",
+        "V",
+        null,
+        "Get model tags"
+      ],
+      [
+        "POST",
+        "/create",
+        "V",
+        "{id,name,meta:{...},params:{system,...},info:{base_model_id,...}}",
+        "Create model"
+      ],
+      [
+        "GET",
+        "/export",
+        "V",
+        null,
+        "Export models"
+      ],
+      [
+        "POST",
+        "/import",
+        "V",
+        "{models:[dict]}",
+        "Import models"
+      ],
+      [
+        "GET",
+        "/model",
+        "V",
+        null,
+        "Get model by ID (?id=)"
+      ],
+      [
+        "POST",
+        "/model/toggle",
+        "V",
+        null,
+        "Toggle model active (?id=)"
+      ],
+      [
+        "POST",
+        "/model/update",
+        "V",
+        "{id,...same as create}",
+        "Update model"
+      ],
+      [
+        "POST",
+        "/model/access/update",
+        "V",
+        "{id,name?,access_grants:[...]}",
+        "Update access grants"
+      ],
+      [
+        "POST",
+        "/model/delete",
+        "V",
+        "{id:str}",
+        "Delete model"
+      ]
+    ]
+  },
+  "tools": {
+    "prefix": "/api/v1/tools",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List all tools"
+      ],
+      [
+        "GET",
+        "/list",
+        "V",
+        null,
+        "List tools with access info"
+      ],
+      [
+        "GET",
+        "/export",
+        "V",
+        null,
+        "Export tools"
+      ],
+      [
+        "POST",
+        "/create",
+        "V",
+        "{id,name,content,meta:{description,manifest:{}}}",
+        "Create tool"
+      ],
+      [
+        "GET",
+        "/id/{id}",
+        "V",
+        null,
+        "Get tool"
+      ],
+      [
+        "POST",
+        "/id/{id}/update",
+        "V",
+        "{id,name,content,meta}",
+        "Update tool"
+      ],
+      [
+        "POST",
+        "/id/{id}/access/update",
+        "V",
+        "{access_grants:[...]}",
+        "Update access grants"
+      ],
+      [
+        "DELETE",
+        "/id/{id}/delete",
+        "V",
+        null,
+        "Delete tool"
+      ],
+      [
+        "GET",
+        "/id/{id}/valves",
+        "V",
+        null,
+        "Get valves"
+      ],
+      [
+        "GET",
+        "/id/{id}/valves/spec",
+        "V",
+        null,
+        "Get valves JSON schema"
+      ],
+      [
+        "POST",
+        "/id/{id}/valves/update",
+        "V",
+        "dict",
+        "Update valves"
+      ]
+    ]
+  },
+  "functions": {
+    "prefix": "/api/v1/functions",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List functions"
+      ],
+      [
+        "GET",
+        "/list",
+        "A",
+        null,
+        "List functions (admin, with user info)"
+      ],
+      [
+        "GET",
+        "/export",
+        "A",
+        null,
+        "Export functions"
+      ],
+      [
+        "POST",
+        "/create",
+        "A",
+        "{id,name,content,meta:{description,manifest:{}}}",
+        "Create function"
+      ],
+      [
+        "GET",
+        "/id/{id}",
+        "A",
+        null,
+        "Get function"
+      ],
+      [
+        "POST",
+        "/id/{id}/toggle",
+        "A",
+        null,
+        "Toggle active"
+      ],
+      [
+        "POST",
+        "/id/{id}/toggle/global",
+        "A",
+        null,
+        "Toggle global"
+      ],
+      [
+        "POST",
+        "/id/{id}/update",
+        "A",
+        "{id,name,content,meta}",
+        "Update function"
+      ],
+      [
+        "DELETE",
+        "/id/{id}/delete",
+        "A",
+        null,
+        "Delete function"
+      ],
+      [
+        "GET",
+        "/id/{id}/valves",
+        "A",
+        null,
+        "Get valves"
+      ],
+      [
+        "GET",
+        "/id/{id}/valves/spec",
+        "A",
+        null,
+        "Get valves JSON schema"
+      ],
+      [
+        "POST",
+        "/id/{id}/valves/update",
+        "A",
+        "dict",
+        "Update valves"
+      ]
+    ]
+  },
+  "knowledge": {
+    "prefix": "/api/v1/knowledge",
+    "note": "GET /{id} returns metadata only (files=null). Use /{id}/files for file list. file/remove DESTROYS the underlying file.",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List knowledge bases (page?)"
+      ],
+      [
+        "GET",
+        "/search",
+        "V",
+        null,
+        "Search KBs (query?,page?)"
+      ],
+      [
+        "GET",
+        "/search/files",
+        "V",
+        null,
+        "Search files across KBs (query?,page?)"
+      ],
+      [
+        "POST",
+        "/create",
+        "V",
+        "{name,description?}",
+        "Create KB"
+      ],
+      [
+        "POST",
+        "/reindex",
+        "A",
+        null,
+        "Reindex all KB files"
+      ],
+      [
+        "GET",
+        "/{id}",
+        "V",
+        null,
+        "Get KB metadata (files always null)"
+      ],
+      [
+        "POST",
+        "/{id}/update",
+        "V",
+        "{name,description?}",
+        "Update KB"
+      ],
+      [
+        "POST",
+        "/{id}/access/update",
+        "V",
+        "{access_grants:[...]}",
+        "Update access grants"
+      ],
+      [
+        "GET",
+        "/{id}/files",
+        "V",
+        null,
+        "List KB files (query?,page?)"
+      ],
+      [
+        "POST",
+        "/{id}/file/add",
+        "V",
+        "{file_id:str}",
+        "Add file to KB"
+      ],
+      [
+        "POST",
+        "/{id}/file/update",
+        "V",
+        "{file_id:str}",
+        "Re-process file in KB"
+      ],
+      [
+        "POST",
+        "/{id}/file/remove",
+        "V",
+        "{file_id:str}",
+        "Remove file (DESTROYS file!)"
+      ],
+      [
+        "DELETE",
+        "/{id}/delete",
+        "V",
+        null,
+        "Delete KB"
+      ],
+      [
+        "POST",
+        "/{id}/reset",
+        "V",
+        null,
+        "Reset KB (drop vectors)"
+      ],
+      [
+        "POST",
+        "/{id}/files/batch/add",
+        "V",
+        "[{file_id:str},...]",
+        "Batch add files"
+      ],
+      [
+        "GET",
+        "/{id}/export",
+        "A",
+        null,
+        "Export KB as zip"
+      ]
+    ]
+  },
+  "files": {
+    "prefix": "/api/v1/files",
+    "endpoints": [
+      [
+        "POST",
+        "/",
+        "V",
+        "multipart: file + metadata?",
+        "Upload file"
+      ],
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List files (page?,content?)"
+      ],
+      [
+        "GET",
+        "/search",
+        "V",
+        null,
+        "Search files (filename,content?,skip?,limit?)"
+      ],
+      [
+        "DELETE",
+        "/all",
+        "A",
+        null,
+        "Delete all files"
+      ],
+      [
+        "GET",
+        "/{id}",
+        "V",
+        null,
+        "Get file metadata"
+      ],
+      [
+        "GET",
+        "/{id}/data/content",
+        "V",
+        null,
+        "Get extracted text content"
+      ],
+      [
+        "POST",
+        "/{id}/data/content/update",
+        "V",
+        "{content:str}",
+        "Update text content"
+      ],
+      [
+        "GET",
+        "/{id}/content",
+        "V",
+        null,
+        "Download file (attachment? param)"
+      ],
+      [
+        "DELETE",
+        "/{id}",
+        "V",
+        null,
+        "Delete file"
+      ]
+    ]
+  },
+  "skills": {
+    "prefix": "/api/v1/skills",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List skills"
+      ],
+      [
+        "GET",
+        "/list",
+        "V",
+        null,
+        "Paginated skill list (query?,page?)"
+      ],
+      [
+        "GET",
+        "/export",
+        "V",
+        null,
+        "Export skills"
+      ],
+      [
+        "POST",
+        "/create",
+        "V",
+        "{id,name,description?,content,meta:{tags:[]},is_active:bool}",
+        "Create skill"
+      ],
+      [
+        "GET",
+        "/id/{id}",
+        "V",
+        null,
+        "Get skill"
+      ],
+      [
+        "POST",
+        "/id/{id}/update",
+        "V",
+        "{id,name,description?,content,meta,is_active}",
+        "Update skill"
+      ],
+      [
+        "POST",
+        "/id/{id}/access/update",
+        "V",
+        "{access_grants:[...]}",
+        "Update access (replaces all)"
+      ],
+      [
+        "POST",
+        "/id/{id}/toggle",
+        "V",
+        null,
+        "Toggle active"
+      ],
+      [
+        "DELETE",
+        "/id/{id}/delete",
+        "V",
+        null,
+        "Delete skill"
+      ]
+    ]
+  },
+  "memories": {
+    "prefix": "/api/v1/memories",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List user's memories"
+      ],
+      [
+        "POST",
+        "/add",
+        "V",
+        "{content:str}",
+        "Add memory"
+      ],
+      [
+        "POST",
+        "/query",
+        "V",
+        "{content:str,k?:int}",
+        "Query memories (vector search)"
+      ],
+      [
+        "POST",
+        "/reset",
+        "V",
+        null,
+        "Re-embed all memories"
+      ],
+      [
+        "DELETE",
+        "/delete/user",
+        "V",
+        null,
+        "Delete all user memories"
+      ],
+      [
+        "POST",
+        "/{id}/update",
+        "V",
+        "{content?:str}",
+        "Update memory"
+      ],
+      [
+        "DELETE",
+        "/{id}",
+        "V",
+        null,
+        "Delete memory"
+      ]
+    ]
+  },
+  "channels": {
+    "prefix": "/api/v1/channels",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List user's channels"
+      ],
+      [
+        "GET",
+        "/list",
+        "V",
+        null,
+        "List all channels (admin sees all)"
+      ],
+      [
+        "POST",
+        "/create",
+        "V",
+        "{name,description?,data?,access_control?}",
+        "Create channel"
+      ],
+      [
+        "GET",
+        "/{id}",
+        "V",
+        null,
+        "Get channel"
+      ],
+      [
+        "GET",
+        "/{id}/members",
+        "V",
+        null,
+        "List members (query?,page?)"
+      ],
+      [
+        "POST",
+        "/{id}/update",
+        "V",
+        "{name,description?}",
+        "Update channel"
+      ],
+      [
+        "POST",
+        "/{id}/update/members/add",
+        "V",
+        "{user_ids:[str],group_ids:[str]}",
+        "Add members"
+      ],
+      [
+        "POST",
+        "/{id}/update/members/remove",
+        "V",
+        "{user_ids:[str]}",
+        "Remove members"
+      ],
+      [
+        "DELETE",
+        "/{id}/delete",
+        "V",
+        null,
+        "Delete channel"
+      ],
+      [
+        "GET",
+        "/{id}/messages",
+        "V",
+        null,
+        "List messages (skip?,limit?)"
+      ],
+      [
+        "POST",
+        "/{id}/messages/post",
+        "V",
+        "{content:str,data?,parent_id?}",
+        "Post message"
+      ],
+      [
+        "GET",
+        "/{id}/messages/{msg_id}",
+        "V",
+        null,
+        "Get message"
+      ],
+      [
+        "POST",
+        "/{id}/messages/{msg_id}/update",
+        "V",
+        "{content:str}",
+        "Update message"
+      ],
+      [
+        "DELETE",
+        "/{id}/messages/{msg_id}/delete",
+        "V",
+        null,
+        "Delete message"
+      ],
+      [
+        "GET",
+        "/{id}/messages/pinned",
+        "V",
+        null,
+        "Pinned messages"
+      ],
+      [
+        "POST",
+        "/{id}/messages/{msg_id}/pin",
+        "V",
+        "{is_pinned:bool}",
+        "Pin/unpin message"
+      ],
+      [
+        "GET",
+        "/{id}/messages/{msg_id}/thread",
+        "V",
+        null,
+        "Get thread"
+      ]
+    ]
+  },
+  "folders": {
+    "prefix": "/api/v1/folders",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List folders"
+      ],
+      [
+        "POST",
+        "/",
+        "V",
+        "{name:str,parent_id?}",
+        "Create folder"
+      ],
+      [
+        "GET",
+        "/{id}",
+        "V",
+        null,
+        "Get folder"
+      ],
+      [
+        "POST",
+        "/{id}/update",
+        "V",
+        "{name:str}",
+        "Rename folder"
+      ],
+      [
+        "POST",
+        "/{id}/update/parent",
+        "V",
+        "{parent_id?}",
+        "Move folder"
+      ],
+      [
+        "DELETE",
+        "/{id}",
+        "V",
+        null,
+        "Delete folder (delete_contents? param)"
+      ]
+    ]
+  },
+  "notes": {
+    "prefix": "/api/v1/notes",
+    "endpoints": [
+      [
+        "GET",
+        "/",
+        "V",
+        null,
+        "List notes (page?)"
+      ],
+      [
+        "GET",
+        "/search",
+        "V",
+        null,
+        "Search notes (query?,page?)"
+      ],
+      [
+        "POST",
+        "/create",
+        "V",
+        "{title,content,meta?}",
+        "Create note"
+      ],
+      [
+        "GET",
+        "/{id}",
+        "V",
+        null,
+        "Get note"
+      ],
+      [
+        "POST",
+        "/{id}/update",
+        "V",
+        "{title,content,meta?}",
+        "Update note"
+      ],
+      [
+        "POST",
+        "/{id}/access/update",
+        "V",
+        "{access_grants:[...]}",
+        "Update access grants"
+      ],
+      [
+        "DELETE",
+        "/{id}/delete",
+        "V",
+        null,
+        "Delete note"
+      ]
+    ]
+  },
+  "evaluations": {
+    "prefix": "/api/v1/evaluations",
+    "endpoints": [
+      [
+        "GET",
+        "/leaderboard",
+        "A",
+        null,
+        "Model leaderboard (query?)"
+      ],
+      [
+        "GET",
+        "/config",
+        "A",
+        null,
+        "Get arena config"
+      ],
+      [
+        "POST",
+        "/config",
+        "A",
+        "{ENABLE_EVALUATION_ARENA_MODELS?,EVALUATION_ARENA_MODELS?}",
+        "Update arena config"
+      ],
+      [
+        "GET",
+        "/feedbacks/all",
+        "A",
+        null,
+        "Get all feedbacks"
+      ],
+      [
+        "GET",
+        "/feedbacks/all/export",
+        "A",
+        null,
+        "Export feedbacks"
+      ],
+      [
+        "GET",
+        "/feedbacks/list",
+        "A",
+        null,
+        "Paginated feedbacks (order_by?,direction?,page?)"
+      ],
+      [
+        "POST",
+        "/feedback",
+        "V",
+        "{type,data:{...}}",
+        "Create feedback"
+      ],
+      [
+        "GET",
+        "/feedback/{id}",
+        "V",
+        null,
+        "Get feedback"
+      ],
+      [
+        "POST",
+        "/feedback/{id}",
+        "V",
+        "{type,data}",
+        "Update feedback"
+      ],
+      [
+        "DELETE",
+        "/feedback/{id}",
+        "V",
+        null,
+        "Delete feedback"
+      ]
+    ]
+  }
+}
