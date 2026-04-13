@@ -505,6 +505,7 @@ def models_show(url, token, model_id):
              ("base", info.get("base_model_id","(none)")),
              ("active", str(info.get("is_active","?"))),
              ("tools", ", ".join(meta.get("toolIds") or []) or "(none)"),
+             ("filters", ", ".join(params.get("filter_ids") or []) or "(none)"),
              ("knowledge", ", ".join(k.get("name","?") for k in (meta.get("knowledge") or [])) or "(none)"),
              ("system", f"{len(params.get('system',''))} chars"),
              ("grants", str(len(info.get("access_grants") or [])))]
@@ -529,6 +530,40 @@ def models_delete(url, token, model_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, "/api/v1/models/model/delete", token, {"id": model_id})
     out(f"deleted {model_id}")
+
+def _models_fetch(c, url, token, model_id):
+    """Fetch a model by ID, returning the parsed JSON."""
+    r = _get(c, url, f"/api/v1/models/model?id={model_id}", token)
+    return r.json()
+
+def models_set_tools(url, token, model_id, *tool_ids):
+    """Set the tool bindings for a workspace model (pass no IDs to clear)."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        model = _models_fetch(c, url, token, model_id)
+        info = model.get("info") or {}
+        meta = info.setdefault("meta", {})
+        params = info.setdefault("params", {})
+        ids = list(tool_ids)
+        meta["toolIds"] = ids
+        # keep params.tool_ids in sync (used by some OWUI versions)
+        params["tool_ids"] = ids
+        model["info"] = info
+        r = _post(c, url, "/api/v1/models/model/update", token, model)
+    label = ", ".join(ids) if ids else "(none)"
+    out(f"tools for {model_id}: {label}")
+
+def models_set_filters(url, token, model_id, *filter_ids):
+    """Set the filter bindings for a workspace model (pass no IDs to clear)."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        model = _models_fetch(c, url, token, model_id)
+        info = model.get("info") or {}
+        params = info.setdefault("params", {})
+        ids = list(filter_ids)
+        params["filter_ids"] = ids
+        model["info"] = info
+        r = _post(c, url, "/api/v1/models/model/update", token, model)
+    label = ", ".join(ids) if ids else "(none)"
+    out(f"filters for {model_id}: {label}")
 
 
 def models_pull_all(url, token, out_dir="."):
@@ -1007,6 +1042,8 @@ COMMANDS.update({
     ("models",    "create"):      (models_create,        "<model.json>",        (1, 1)),
     ("models",    "update"):      (models_update,        "<model.json>",        (1, 1)),
     ("models",    "delete"):      (models_delete,        "<id>",                (1, 1)),
+    ("models",    "set-tools"):   (models_set_tools,     "<id> [tool-id]...",   (1, 999)),
+    ("models",    "set-filters"): (models_set_filters,   "<id> [filter-id]...", (1, 999)),
     ("models",    "pull-all"):    (models_pull_all,      "[dir]",               (0, 1)),
     ("knowledge", "list"):        (knowledge_list,       "",                    (0, 0)),
     ("knowledge", "show"):        (knowledge_show,       "<id>",                (1, 1)),
