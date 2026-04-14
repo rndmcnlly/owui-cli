@@ -369,6 +369,83 @@ functions_res = Resource("functions", "/api/v1/functions",
     workspace_path="/workspace/functions")
 
 
+# ── valves (user valves for tools and functions) ─────────────────────
+
+def _valves_get(url, token, kind, item_id):
+    """GET valves for a tool or function. kind is 'tools' or 'functions'."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        r = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user", token)
+    out(r.json())
+
+def _valves_spec(url, token, kind, item_id):
+    """GET the UserValves spec (schema) for a tool or function."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        r = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user/spec", token)
+    out(r.json())
+
+def _valves_set(url, token, kind, item_id, json_path):
+    """POST updated user valves from a JSON file."""
+    with open(json_path) as f:
+        payload = json.load(f)
+    with httpx.Client(timeout=TIMEOUT) as c:
+        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user/update", token, payload)
+    out(r.json())
+
+def _valves_set_field(url, token, kind, item_id, key, value):
+    """Set a single field in the user valves. Value is parsed as JSON; falls back to string."""
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+        parsed = value
+    with httpx.Client(timeout=TIMEOUT) as c:
+        current = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user", token).json()
+        current[key] = parsed
+        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user/update", token, current)
+    out(r.json())
+
+def _valves_unset_field(url, token, kind, item_id, key):
+    """Remove a single field from the user valves."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        current = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user", token).json()
+        if key not in current:
+            die(f"key '{key}' not found in valves")
+        del current[key]
+        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user/update", token, current)
+    out(r.json())
+
+# Wrappers that bind kind='tools'
+def tools_valves_get(url, token, item_id):
+    _valves_get(url, token, "tools", item_id)
+
+def tools_valves_spec(url, token, item_id):
+    _valves_spec(url, token, "tools", item_id)
+
+def tools_valves_set(url, token, item_id, json_path):
+    _valves_set(url, token, "tools", item_id, json_path)
+
+def tools_valves_set_field(url, token, item_id, key, value):
+    _valves_set_field(url, token, "tools", item_id, key, value)
+
+def tools_valves_unset_field(url, token, item_id, key):
+    _valves_unset_field(url, token, "tools", item_id, key)
+
+# Wrappers that bind kind='functions'
+def functions_valves_get(url, token, item_id):
+    _valves_get(url, token, "functions", item_id)
+
+def functions_valves_spec(url, token, item_id):
+    _valves_spec(url, token, "functions", item_id)
+
+def functions_valves_set(url, token, item_id, json_path):
+    _valves_set(url, token, "functions", item_id, json_path)
+
+def functions_valves_set_field(url, token, item_id, key, value):
+    _valves_set_field(url, token, "functions", item_id, key, value)
+
+def functions_valves_unset_field(url, token, item_id, key):
+    _valves_unset_field(url, token, "functions", item_id, key)
+
+
 class SkillsResource(Resource):
     """Skills use frontmatter and have grant/revoke commands."""
 
@@ -1037,6 +1114,16 @@ for res in [tools_res, functions_res, skills_res]:
 
 # Register special resources
 COMMANDS.update({
+    ("tools",     "valves"):      (tools_valves_get,        "<id>",                  (1, 1)),
+    ("tools",     "valves-spec"): (tools_valves_spec,       "<id>",                  (1, 1)),
+    ("tools",     "valves-set"):  (tools_valves_set,        "<id> <valves.json>",    (2, 2)),
+    ("tools",     "valves-set-field"):  (tools_valves_set_field,   "<id> <key> <value>",  (3, 3)),
+    ("tools",     "valves-unset-field"):(tools_valves_unset_field, "<id> <key>",          (2, 2)),
+    ("functions", "valves"):      (functions_valves_get,    "<id>",                  (1, 1)),
+    ("functions", "valves-spec"): (functions_valves_spec,   "<id>",                  (1, 1)),
+    ("functions", "valves-set"):  (functions_valves_set,    "<id> <valves.json>",    (2, 2)),
+    ("functions", "valves-set-field"):  (functions_valves_set_field,   "<id> <key> <value>",  (3, 3)),
+    ("functions", "valves-unset-field"):(functions_valves_unset_field, "<id> <key>",          (2, 2)),
     ("models",    "list"):        (models_list,          "",                    (0, 0)),
     ("models",    "show"):        (models_show,          "<id>",                (1, 1)),
     ("models",    "create"):      (models_create,        "<model.json>",        (1, 1)),
