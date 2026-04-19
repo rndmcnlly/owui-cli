@@ -13,6 +13,10 @@ Bump both when cutting a release.
 
 Every push to `main` auto-publishes to PyPI via GitHub Actions trusted publishing. Bump the version before pushing, and don't push broken code to main.
 
+## Local development install
+
+After making changes, reinstall locally with `uv tool install --force .` so your modified `owui-cli` is the one on your PATH.
+
 ## Testing before committing
 
 Always verify changes work against a **production Open WebUI server** before committing. Set `OWUI_URL` and `OWUI_TOKEN` and run the relevant commands to confirm they succeed with real API responses — don't rely on local-only reasoning.
