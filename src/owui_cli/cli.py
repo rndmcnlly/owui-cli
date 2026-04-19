@@ -1217,7 +1217,12 @@ def main():
     resource, command = args[0], args[1]
     key = (resource, command)
 
+    # Subcommands are plural (chats, models, etc.) to mirror the OWUI API
+    # paths (/api/v1/chats/, /api/v1/models, ...), not typical CLI convention.
     if key not in COMMANDS:
+        plural = resource + "s"
+        if (plural, command) in COMMANDS:
+            die(f"resources are plural: use '{plural} {command}' not '{resource} {command}'")
         die(f"unknown: {resource} {command}")
 
     fn, arg_spec, (min_args, max_args) = COMMANDS[key]
