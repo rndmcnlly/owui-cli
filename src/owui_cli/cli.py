@@ -43,8 +43,8 @@ def _api(url: str, path: str) -> str:
     return f"{url}{path}"
 
 
-def _get(c: httpx.Client, url: str, path: str, token: str) -> httpx.Response:
-    r = c.get(_api(url, path), headers=_headers(token))
+def _get(c: httpx.Client, url: str, path: str, token: str, params=None) -> httpx.Response:
+    r = c.get(_api(url, path), headers=_headers(token), params=params)
     r.raise_for_status()
     return r
 
@@ -369,81 +369,79 @@ functions_res = Resource("functions", "/api/v1/functions",
     workspace_path="/workspace/functions")
 
 
-# ── valves (user valves for tools and functions) ─────────────────────
+# ── valves (admin/global and per-user, for tools and functions) ──────
+#
+# OWUI plugins can declare two valve schemas:
+#   class Valves(BaseModel)      -> /api/v1/{kind}/id/{id}/valves[/spec|/update]
+#   class UserValves(BaseModel)  -> /api/v1/{kind}/id/{id}/valves/user[/spec|/update]
+#
+# The unprefixed `valves*` commands target the admin/global path (most common
+# case: an admin-set API key). The `valves-user*` commands target the per-user
+# path (the calling user's personal valves on the plugin).
 
-def _valves_get(url, token, kind, item_id):
-    """GET valves for a tool or function. kind is 'tools' or 'functions'."""
+def _valves_get(url, token, kind, item_id, scope=""):
     with httpx.Client(timeout=TIMEOUT) as c:
-        r = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user", token)
+        r = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}", token)
     out(r.json())
 
-def _valves_spec(url, token, kind, item_id):
-    """GET the UserValves spec (schema) for a tool or function."""
+def _valves_spec(url, token, kind, item_id, scope=""):
     with httpx.Client(timeout=TIMEOUT) as c:
-        r = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user/spec", token)
+        r = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}/spec", token)
     out(r.json())
 
-def _valves_set(url, token, kind, item_id, json_path):
-    """POST updated user valves from a JSON file."""
+def _valves_set(url, token, kind, item_id, json_path, scope=""):
     with open(json_path) as f:
         payload = json.load(f)
     with httpx.Client(timeout=TIMEOUT) as c:
-        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user/update", token, payload)
+        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}/update", token, payload)
     out(r.json())
 
-def _valves_set_field(url, token, kind, item_id, key, value):
-    """Set a single field in the user valves. Value is parsed as JSON; falls back to string."""
+def _valves_set_field(url, token, kind, item_id, key, value, scope=""):
+    """Set a single field. Value is parsed as JSON; falls back to string."""
     try:
         parsed = json.loads(value)
     except (json.JSONDecodeError, ValueError):
         parsed = value
     with httpx.Client(timeout=TIMEOUT) as c:
-        current = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user", token).json()
+        current = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}", token).json()
         current[key] = parsed
-        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user/update", token, current)
+        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}/update", token, current)
     out(r.json())
 
-def _valves_unset_field(url, token, kind, item_id, key):
-    """Remove a single field from the user valves."""
+def _valves_unset_field(url, token, kind, item_id, key, scope=""):
     with httpx.Client(timeout=TIMEOUT) as c:
-        current = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user", token).json()
+        current = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}", token).json()
         if key not in current:
             die(f"key '{key}' not found in valves")
         del current[key]
-        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves/user/update", token, current)
+        r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}/update", token, current)
     out(r.json())
 
-# Wrappers that bind kind='tools'
-def tools_valves_get(url, token, item_id):
-    _valves_get(url, token, "tools", item_id)
+# Wrappers — admin/global valves (unprefixed: the common case)
+def tools_valves_get(url, token, item_id):                  _valves_get(url, token, "tools", item_id)
+def tools_valves_spec(url, token, item_id):                 _valves_spec(url, token, "tools", item_id)
+def tools_valves_set(url, token, item_id, json_path):       _valves_set(url, token, "tools", item_id, json_path)
+def tools_valves_set_field(url, token, item_id, key, value):_valves_set_field(url, token, "tools", item_id, key, value)
+def tools_valves_unset_field(url, token, item_id, key):     _valves_unset_field(url, token, "tools", item_id, key)
 
-def tools_valves_spec(url, token, item_id):
-    _valves_spec(url, token, "tools", item_id)
+def functions_valves_get(url, token, item_id):                  _valves_get(url, token, "functions", item_id)
+def functions_valves_spec(url, token, item_id):                 _valves_spec(url, token, "functions", item_id)
+def functions_valves_set(url, token, item_id, json_path):       _valves_set(url, token, "functions", item_id, json_path)
+def functions_valves_set_field(url, token, item_id, key, value):_valves_set_field(url, token, "functions", item_id, key, value)
+def functions_valves_unset_field(url, token, item_id, key):     _valves_unset_field(url, token, "functions", item_id, key)
 
-def tools_valves_set(url, token, item_id, json_path):
-    _valves_set(url, token, "tools", item_id, json_path)
+# Wrappers — per-user valves (`valves-user*`)
+def tools_valves_user_get(url, token, item_id):                  _valves_get(url, token, "tools", item_id, "/user")
+def tools_valves_user_spec(url, token, item_id):                 _valves_spec(url, token, "tools", item_id, "/user")
+def tools_valves_user_set(url, token, item_id, json_path):       _valves_set(url, token, "tools", item_id, json_path, "/user")
+def tools_valves_user_set_field(url, token, item_id, key, value):_valves_set_field(url, token, "tools", item_id, key, value, "/user")
+def tools_valves_user_unset_field(url, token, item_id, key):     _valves_unset_field(url, token, "tools", item_id, key, "/user")
 
-def tools_valves_set_field(url, token, item_id, key, value):
-    _valves_set_field(url, token, "tools", item_id, key, value)
-
-def tools_valves_unset_field(url, token, item_id, key):
-    _valves_unset_field(url, token, "tools", item_id, key)
-
-# Wrappers that bind kind='functions'
-def functions_valves_get(url, token, item_id):
-    _valves_get(url, token, "functions", item_id)
-
-def functions_valves_spec(url, token, item_id):
-    _valves_spec(url, token, "functions", item_id)
-
-def functions_valves_set(url, token, item_id, json_path):
-    _valves_set(url, token, "functions", item_id, json_path)
-
-def functions_valves_set_field(url, token, item_id, key, value):
-    _valves_set_field(url, token, "functions", item_id, key, value)
-
-def functions_valves_unset_field(url, token, item_id, key):
-    _valves_unset_field(url, token, "functions", item_id, key)
+def functions_valves_user_get(url, token, item_id):                  _valves_get(url, token, "functions", item_id, "/user")
+def functions_valves_user_spec(url, token, item_id):                 _valves_spec(url, token, "functions", item_id, "/user")
+def functions_valves_user_set(url, token, item_id, json_path):       _valves_set(url, token, "functions", item_id, json_path, "/user")
+def functions_valves_user_set_field(url, token, item_id, key, value):_valves_set_field(url, token, "functions", item_id, key, value, "/user")
+def functions_valves_user_unset_field(url, token, item_id, key):     _valves_unset_field(url, token, "functions", item_id, key, "/user")
 
 
 class SkillsResource(Resource):
@@ -691,9 +689,20 @@ def models_pull_all(url, token, out_dir="."):
 # ── knowledge (special: files subresource, file/remove is destructive) ─
 
 def knowledge_list(url, token):
+    kbs = []
+    page = 1
     with httpx.Client(timeout=TIMEOUT) as c:
-        data = _get(c, url, "/api/v1/knowledge/", token).json()
-    kbs = data if isinstance(data, list) else data.get("items", [])
+        while True:
+            data = _get(c, url, "/api/v1/knowledge/", token, params={"page": page}).json()
+            batch = data["items"] if isinstance(data, dict) else data
+            if not batch:
+                break
+            kbs.extend(batch)
+            if isinstance(data, dict):
+                if len(kbs) >= data.get("total", 0): break
+            else:
+                break
+            page += 1
     rows = [{"id": k.get("id",""), "name": k.get("name",""),
              "desc": (k.get("description") or "")[:50]}
             for k in sorted(kbs, key=lambda k: k.get("name",""))]
@@ -744,12 +753,25 @@ def knowledge_remove_file(url, token, kb_id, file_id):
 # ── files ─────────────────────────────────────────────────────────────
 
 def files_list(url, token):
+    rows = []
+    page = 1
     with httpx.Client(timeout=TIMEOUT) as c:
-        data = _get(c, url, "/api/v1/files/", token).json()
-    rows = [{"id": f.get("id",""),
-             "name": (f.get("meta") or {}).get("name") or f.get("filename",""),
-             "size": str((f.get("meta") or {}).get("size","?"))}
-            for f in data]
+        while True:
+            data = _get(c, url, "/api/v1/files/", token,
+                        params={"page": page, "content": "false"}).json()
+            # OWUI >= 0.9 returns {items, total}; older versions return a bare list.
+            batch = data["items"] if isinstance(data, dict) else data
+            if not batch:
+                break
+            rows.extend({"id": f.get("id",""),
+                         "name": (f.get("meta") or {}).get("name") or f.get("filename",""),
+                         "size": str((f.get("meta") or {}).get("size","?"))}
+                        for f in batch)
+            if isinstance(data, dict):
+                if len(rows) >= data.get("total", 0): break
+            else:
+                break  # bare-list response is unpaginated
+            page += 1
     out_table(rows, [("FILE_ID","id",36), ("NAME","name",30), ("SIZE","size",8)])
 
 def files_show(url, token, file_id):
@@ -1119,11 +1141,21 @@ COMMANDS.update({
     ("tools",     "valves-set"):  (tools_valves_set,        "<id> <valves.json>",    (2, 2)),
     ("tools",     "valves-set-field"):  (tools_valves_set_field,   "<id> <key> <value>",  (3, 3)),
     ("tools",     "valves-unset-field"):(tools_valves_unset_field, "<id> <key>",          (2, 2)),
+    ("tools",     "valves-user"):      (tools_valves_user_get,        "<id>",                  (1, 1)),
+    ("tools",     "valves-user-spec"): (tools_valves_user_spec,       "<id>",                  (1, 1)),
+    ("tools",     "valves-user-set"):  (tools_valves_user_set,        "<id> <valves.json>",    (2, 2)),
+    ("tools",     "valves-user-set-field"):  (tools_valves_user_set_field,   "<id> <key> <value>",  (3, 3)),
+    ("tools",     "valves-user-unset-field"):(tools_valves_user_unset_field, "<id> <key>",          (2, 2)),
     ("functions", "valves"):      (functions_valves_get,    "<id>",                  (1, 1)),
     ("functions", "valves-spec"): (functions_valves_spec,   "<id>",                  (1, 1)),
     ("functions", "valves-set"):  (functions_valves_set,    "<id> <valves.json>",    (2, 2)),
     ("functions", "valves-set-field"):  (functions_valves_set_field,   "<id> <key> <value>",  (3, 3)),
     ("functions", "valves-unset-field"):(functions_valves_unset_field, "<id> <key>",          (2, 2)),
+    ("functions", "valves-user"):      (functions_valves_user_get,    "<id>",                  (1, 1)),
+    ("functions", "valves-user-spec"): (functions_valves_user_spec,   "<id>",                  (1, 1)),
+    ("functions", "valves-user-set"):  (functions_valves_user_set,    "<id> <valves.json>",    (2, 2)),
+    ("functions", "valves-user-set-field"):  (functions_valves_user_set_field,   "<id> <key> <value>",  (3, 3)),
+    ("functions", "valves-user-unset-field"):(functions_valves_user_unset_field, "<id> <key>",          (2, 2)),
     ("models",    "list"):        (models_list,          "",                    (0, 0)),
     ("models",    "show"):        (models_show,          "<id>",                (1, 1)),
     ("models",    "create"):      (models_create,        "<model.json>",        (1, 1)),
