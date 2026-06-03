@@ -444,6 +444,23 @@ def functions_valves_user_set_field(url, token, item_id, key, value):_valves_set
 def functions_valves_user_unset_field(url, token, item_id, key):     _valves_unset_field(url, token, "functions", item_id, key, "/user")
 
 
+# ── functions toggle (activate / deactivate, and global) ─────────────
+
+def functions_toggle(url, token, item_id):
+    """Toggle a function's is_active flag."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        r = _post(c, url, f"/api/v1/functions/id/{item_id}/toggle", token)
+    f = r.json()
+    out(f"{item_id} {'active' if f.get('is_active') else 'inactive'}")
+
+def functions_toggle_global(url, token, item_id):
+    """Toggle a function's is_global flag (applies to all models)."""
+    with httpx.Client(timeout=TIMEOUT) as c:
+        r = _post(c, url, f"/api/v1/functions/id/{item_id}/toggle/global", token)
+    f = r.json()
+    out(f"{item_id} {'global' if f.get('is_global') else 'not global'}")
+
+
 class SkillsResource(Resource):
     """Skills use frontmatter and have grant/revoke commands."""
 
@@ -573,17 +590,16 @@ def models_show(url, token, model_id):
     if JSON_OUTPUT:
         out(m)
         return
-    info = m.get("info") or {}
-    meta = info.get("meta") or {}
-    params = info.get("params") or {}
+    meta = m.get("meta") or {}
+    params = m.get("params") or {}
     pairs = [("id", m.get("id","")), ("name", m.get("name","")),
-             ("base", info.get("base_model_id","(none)")),
-             ("active", str(info.get("is_active","?"))),
+             ("base", m.get("base_model_id","(none)") or "(none)"),
+             ("active", str(m.get("is_active","?"))),
              ("tools", ", ".join(meta.get("toolIds") or []) or "(none)"),
-             ("filters", ", ".join(params.get("filter_ids") or []) or "(none)"),
+             ("filters", ", ".join(meta.get("filterIds") or []) or "(none)"),
              ("knowledge", ", ".join(k.get("name","?") for k in (meta.get("knowledge") or [])) or "(none)"),
-             ("system", f"{len(params.get('system',''))} chars"),
-             ("grants", str(len(info.get("access_grants") or [])))]
+             ("system", f"{len(params.get('system') or '')} chars"),
+             ("grants", str(len(m.get("access_grants") or [])))]
     out_kv(pairs)
 
 def models_create(url, token, json_path):
@@ -607,23 +623,38 @@ def models_delete(url, token, model_id):
     out(f"deleted {model_id}")
 
 def _models_fetch(c, url, token, model_id):
-    """Fetch a model by ID, returning the parsed JSON."""
+    """Fetch a model by ID, returning the parsed JSON (flat ModelModel shape)."""
     r = _get(c, url, f"/api/v1/models/model?id={model_id}", token)
     return r.json()
+
+def _models_form(model):
+    """Build a ModelForm update payload from a fetched flat model.
+
+    OWUI's Model schema is flat: top-level `meta`, `params`, `base_model_id`,
+    `name`, `is_active`, `access_grants`. The /model/update endpoint accepts a
+    ModelForm of the same shape (extra keys ignored). Rebuilding explicitly
+    avoids leaking response-only fields (user, write_access, timestamps) and
+    ensures `meta`/`params` round-trip intact.
+    """
+    return {
+        "id": model.get("id"),
+        "base_model_id": model.get("base_model_id"),
+        "name": model.get("name", model.get("id", "")),
+        "meta": model.get("meta") or {},
+        "params": model.get("params") or {},
+        "access_grants": model.get("access_grants") or [],
+        "is_active": model.get("is_active", True),
+    }
 
 def models_set_tools(url, token, model_id, *tool_ids):
     """Set the tool bindings for a workspace model (pass no IDs to clear)."""
     with httpx.Client(timeout=TIMEOUT) as c:
         model = _models_fetch(c, url, token, model_id)
-        info = model.get("info") or {}
-        meta = info.setdefault("meta", {})
-        params = info.setdefault("params", {})
+        form = _models_form(model)
         ids = list(tool_ids)
-        meta["toolIds"] = ids
-        # keep params.tool_ids in sync (used by some OWUI versions)
-        params["tool_ids"] = ids
-        model["info"] = info
-        r = _post(c, url, "/api/v1/models/model/update", token, model)
+        # OWUI binds per-model tools via meta.toolIds.
+        form["meta"]["toolIds"] = ids
+        r = _post(c, url, "/api/v1/models/model/update", token, form)
     label = ", ".join(ids) if ids else "(none)"
     out(f"tools for {model_id}: {label}")
 
@@ -631,12 +662,12 @@ def models_set_filters(url, token, model_id, *filter_ids):
     """Set the filter bindings for a workspace model (pass no IDs to clear)."""
     with httpx.Client(timeout=TIMEOUT) as c:
         model = _models_fetch(c, url, token, model_id)
-        info = model.get("info") or {}
-        params = info.setdefault("params", {})
+        form = _models_form(model)
         ids = list(filter_ids)
-        params["filter_ids"] = ids
-        model["info"] = info
-        r = _post(c, url, "/api/v1/models/model/update", token, model)
+        # OWUI reads per-model filters from meta.filterIds
+        # (see backend/open_webui/utils/filter.py).
+        form["meta"]["filterIds"] = ids
+        r = _post(c, url, "/api/v1/models/model/update", token, form)
     label = ", ".join(ids) if ids else "(none)"
     out(f"filters for {model_id}: {label}")
 
@@ -1156,6 +1187,8 @@ COMMANDS.update({
     ("functions", "valves-user-set"):  (functions_valves_user_set,    "<id> <valves.json>",    (2, 2)),
     ("functions", "valves-user-set-field"):  (functions_valves_user_set_field,   "<id> <key> <value>",  (3, 3)),
     ("functions", "valves-user-unset-field"):(functions_valves_user_unset_field, "<id> <key>",          (2, 2)),
+    ("functions", "toggle"):        (functions_toggle,        "<id>",                  (1, 1)),
+    ("functions", "toggle-global"): (functions_toggle_global, "<id>",                  (1, 1)),
     ("models",    "list"):        (models_list,          "",                    (0, 0)),
     ("models",    "show"):        (models_show,          "<id>",                (1, 1)),
     ("models",    "create"):      (models_create,        "<model.json>",        (1, 1)),
