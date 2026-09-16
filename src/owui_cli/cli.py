@@ -602,20 +602,56 @@ def models_show(url, token, model_id):
              ("grants", str(len(m.get("access_grants") or [])))]
     out_kv(pairs)
 
+_MIME_BY_EXT = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def _inline_sibling_images(json_path: str, payload: dict) -> list[str]:
+    """Replace bare sibling-image references in meta.profile_image_url with data URIs.
+
+    The repo convention stores the icon as a sibling file referenced by bare
+    filename (e.g. "profile.png"). OWUI's stored-model validator (utils/validate.py)
+    rejects bare filenames and silently clears them to null, so push must inline
+    the sibling image instead — the mirror of models_pull_all's extraction.
+    Returns the list of inlined filenames.
+    """
+    inlined = []
+    meta = payload.get("meta") if isinstance(payload, dict) else None
+    ref = (meta or {}).get("profile_image_url")
+    if not isinstance(ref, str) or not ref or ref.startswith(("data:", "http://", "https://", "/")):
+        return inlined
+    image_path = os.path.join(os.path.dirname(os.path.abspath(json_path)), ref)
+    ext = os.path.splitext(ref)[1].lstrip(".").lower()
+    mime = _MIME_BY_EXT.get(ext)
+    if mime and os.path.isfile(image_path):
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        payload["meta"]["profile_image_url"] = f"data:{mime};base64,{b64}"
+        inlined.append(ref)
+    return inlined
+
+
 def models_create(url, token, json_path):
     with open(json_path) as f:
         payload = json.load(f)
+    inlined = _inline_sibling_images(json_path, payload)
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, "/api/v1/models/create", token, payload)
     m = r.json()
-    out(f"created {m.get('id')}")
+    out(f"created {m.get('id')}" + (f" (inlined {', '.join(inlined)})" if inlined else ""))
 
 def models_update(url, token, json_path):
     with open(json_path) as f:
         payload = json.load(f)
+    inlined = _inline_sibling_images(json_path, payload)
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, "/api/v1/models/model/update", token, payload)
-    out(f"updated {r.json().get('id')}")
+    out(f"updated {r.json().get('id')}" + (f" (inlined {', '.join(inlined)})" if inlined else ""))
 
 def models_delete(url, token, model_id):
     with httpx.Client(timeout=TIMEOUT) as c:
