@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 from importlib.resources import files
 
 import httpx
@@ -1074,6 +1075,90 @@ def chats_delete(url, token, chat_id):
     out(f"deleted {chat_id}")
 
 
+_STREAM_TIMEOUT = httpx.Timeout(TIMEOUT, read=3600.0)
+
+
+def _iter_chats_all(url, token):
+    """Stream GET /api/v1/chats/all as NDJSON, yielding one chat per line.
+
+    On v0.11.x the endpoint returns an application/x-ndjson stream whose
+    export can run to hundreds of MB — never buffered server-side. Parse
+    incrementally so clients (and pull-all) don't need the whole thing in
+    memory.
+
+    Decode-buffer manually over raw bytes: httpx's iter_lines can truncate a
+    long line at a decode-chunk boundary (observed with model_dump_json
+    exports whose message trees run large), so split b'\n' ourselves and
+    decode each complete line.
+    """
+    with httpx.Client(timeout=_STREAM_TIMEOUT) as c:
+        with c.stream("GET", _api(url, "/api/v1/chats/all"), headers=_headers(token)) as r:
+            r.raise_for_status()
+            buf = b""
+            for chunk in r.iter_raw():
+                buf += chunk
+                while True:
+                    idx = buf.find(b"\n")
+                    if idx < 0:
+                        break
+                    line = buf[:idx]
+                    buf = buf[idx + 1:]
+                    if line.strip():
+                        yield json.loads(line.decode("utf-8"))
+
+
+def chats_all(url, token):
+    count = 0
+    chats = []
+    for chat in _iter_chats_all(url, token):
+        count += 1
+        if JSON_OUTPUT:
+            chats.append(chat)
+        else:
+            title = chat.get("chat", {}).get("title") or chat.get("title") or "(untitled)"
+            print(f"{count}\t{chat.get('id','')}\t{str(title)[:60]}")
+    if JSON_OUTPUT:
+        out(chats)
+    else:
+        print(f"-- {count} chats", file=sys.stderr)
+
+def chats_pull_all(url, token, out_dir="chats"):
+    count = 0
+    os.makedirs(out_dir, exist_ok=True)
+    for chat in _iter_chats_all(url, token):
+        chat_id = chat.get("id", "")
+        if not chat_id:
+            continue
+        _write_json(os.path.join(out_dir, f"{chat_id}.json"), chat)
+        count += 1
+        if count % 100 == 0:
+            print(f"... {count}", file=sys.stderr)
+    out(f"pulled {count} chats into {out_dir}")
+
+def chats_stats(url, token, page="1"):
+    with httpx.Client(timeout=_STREAM_TIMEOUT) as c:
+        r = _get(c, url, f"/api/v1/chats/stats/export?page={page}", token)
+    data = r.json()
+    if JSON_OUTPUT:
+        out(data)
+        return
+    items = data.get("items", data) if isinstance(data, dict) else data
+    total = data.get("total") if isinstance(data, dict) else None
+    rows = []
+    for s in items:
+        st = s.get("stats") or {}
+        models = st.get("models") or st.get("history_models") or {}
+        rows.append({
+            "id": s.get("id", s.get("chat_id", "")),
+            "msgs": st.get("message_count", st.get("history_message_count", "?")),
+            "models": ", ".join(models.keys())[:30],
+            "updated": time.strftime("%Y-%m-%d", time.gmtime(s.get("updated_at"))) if s.get("updated_at") else "",
+        })
+    out_table(rows, [("CHAT_ID","id",36), ("MSGS","msgs",6), ("MODELS","models",30), ("UPDATED","updated",10)])
+    if total is not None:
+        print(f"-- page {page}: {len(items)} chats, total {total}")
+
+
 # ── configs ──────────────────────────────────────────────────────────
 
 def configs_show(url, token):
@@ -1255,6 +1340,9 @@ COMMANDS.update({
     ("chats",     "list"):        (chats_list,           "[page]",              (0, 1)),
     ("chats",     "search"):      (chats_search,         "<query> [page]",      (1, 2)),
     ("chats",     "show"):        (chats_show,           "<id>",                (1, 1)),
+    ("chats",     "all"):         (chats_all,            "",                    (0, 0)),
+    ("chats",     "pull-all"):    (chats_pull_all,       "[dir]",               (0, 1)),
+    ("chats",     "stats"):       (chats_stats,          "[page]",              (0, 1)),
     ("chats",     "delete"):      (chats_delete,         "<id>",                (1, 1)),
     ("users",     "list"):        (users_list,           "",                    (0, 0)),
     ("users",     "find"):        (users_find,           "<query>",             (1, 1)),
