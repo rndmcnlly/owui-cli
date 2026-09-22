@@ -14,8 +14,11 @@ import base64
 import json
 import os
 import re
+import secrets
+import stat
 import sys
 import time
+from urllib.parse import quote, urlsplit
 from importlib.resources import files
 
 import httpx
@@ -31,8 +34,19 @@ SCHEMA_PATH = files("owui_cli.data").joinpath("api-schema.json")
 def _env():
     url = os.environ.get("OWUI_URL", "")
     token = os.environ.get("OWUI_TOKEN", "")
+    token_file = os.environ.get("OWUI_TOKEN_FILE", "")
+    if token and token_file:
+        die("set only one of OWUI_TOKEN and OWUI_TOKEN_FILE")
+    if token_file:
+        token = _read_text(token_file).strip()
     if not url or not token:
-        die("OWUI_URL and OWUI_TOKEN env vars required")
+        die("OWUI_URL and OWUI_TOKEN or OWUI_TOKEN_FILE required")
+    parsed = urlsplit(url)
+    if (parsed.scheme not in ("https", "http") or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment):
+        die("OWUI_URL must be an HTTP(S) URL without credentials, query, or fragment")
+    if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        die("OWUI_URL requires HTTPS except on loopback")
     return url.rstrip("/"), token
 
 
@@ -63,8 +77,34 @@ def _delete(c: httpx.Client, url: str, path: str, token: str) -> httpx.Response:
 
 
 def die(msg: str, code: int = 1):
-    print(msg, file=sys.stderr)
+    print(json.dumps({"ok": False, "error": msg}) if JSON_OUTPUT else msg, file=sys.stderr)
     sys.exit(code)
+
+
+def receipt(resource, operation, item_id=None, **details):
+    """Mutation allowlist: never pass payloads or whole server objects here."""
+    data = {"ok": True, "resource": resource, "operation": operation}
+    if item_id is not None:
+        if not isinstance(item_id, str):
+            die("invalid receipt identifier in server response or input")
+        data["id"] = item_id
+    data.update(details)
+    out(data)
+
+
+def _read_text(path):
+    """A literal '-' reads stdin without including data in argv."""
+    if path == "-":
+        return sys.stdin.read()
+    with open(path) as f:
+        return f.read()
+
+
+def _read_json(path):
+    payload = json.loads(_read_text(path))
+    if not isinstance(payload, dict):
+        die("JSON input must be an object")
+    return payload
 
 def out(data, fmt_fn=None):
     """Print data. JSON mode emits raw JSON; otherwise use fmt_fn or default."""
@@ -134,19 +174,66 @@ def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
 
 
 def _write_file(path: str, content: str | bytes):
-    """Write content to a file, creating parent directories as needed."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    """Write private exports; refuse symlink targets and hard-linked files."""
+    parent = os.path.dirname(os.path.abspath(path))
+    _private_dir(parent)
+    _reject_link(path)
+    if os.path.exists(path):
+        _check_export_file(os.stat(path))
     mode = "wb" if isinstance(content, bytes) else "w"
-    with open(path, mode) as f:
+    flags = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, mode) as f:
+        _check_export_file(os.fstat(f.fileno()))
+        if hasattr(os, "fchmod"):
+            os.fchmod(f.fileno(), 0o600)
+        f.truncate(0)
         f.write(content)
 
 
 def _write_json(path: str, obj):
     """Write JSON to a file, creating parent directories as needed."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    _write_file(path, json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
+
+
+def _check_export_file(info):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        die("export target must be a regular file with one hard link")
+
+
+def _reject_link(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    # Windows junctions and other reparse points are links too. lstat does not
+    # follow them. O_NOFOLLOW adds atomic leaf protection on POSIX; callers must
+    # still control the output directory against concurrent local replacement.
+    reparse = getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if stat.S_ISLNK(info.st_mode) or reparse:
+        die("export paths must not contain symlinks or reparse points")
+
+
+def _private_dir(path):
+    _reject_link(path)
+    parent = os.path.dirname(path)
+    if parent != path:
+        _private_dir(parent)
+    os.makedirs(path, mode=0o700, exist_ok=True)
+
+
+def _export_name(value):
+    """Encode remote identifiers as one local component (including model '/')."""
+    if not isinstance(value, str) or not value or value in (".", ".."):
+        die("invalid export identifier")
+    name = quote(value, safe="")
+    # Windows strips terminal dots and recognizes DOS device names even with an
+    # extension. Encode those too so remote IDs cannot alias special targets.
+    name = name.rstrip(".") + "%2E" * (len(name) - len(name.rstrip(".")))
+    if re.match(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", name, re.IGNORECASE):
+        name = f"%{ord(name[0]):02X}" + name[1:]
+    return name
 
 
 def _extract_data_uri(data_uri: str) -> tuple[str, bytes] | None:
@@ -157,7 +244,10 @@ def _extract_data_uri(data_uri: str) -> tuple[str, bytes] | None:
     if not b64data:
         return None
     mime = header.split(";")[0].replace("data:", "")
-    ext = mime.split("/")[1] if "/" in mime else "png"
+    ext = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif",
+           "image/webp": "webp"}.get(mime)
+    if ext is None:
+        return None
     return ext, base64.b64decode(b64data)
 
 
@@ -264,26 +354,32 @@ class Resource:
 
         title = meta.get("title", meta.get("name",
                  source_path.rsplit("/", 1)[-1].removesuffix(self.deploy_ext)))
-        version = meta.get("version", "")
         if not item_id:
             item_id = meta.get("id", _slugify(title))
 
         with httpx.Client(timeout=TIMEOUT) as c:
             r = c.get(_api(url, self.item_path(item_id)), headers=_headers(token))
 
+            missing = r.status_code == 404
+            if r.status_code == 401 and self.name == "functions":
+                # OWUI returns 401 for missing functions. Confirm absence using
+                # the admin list, rather than treating authorization failure as absence.
+                listed = _get(c, url, f"{self.prefix}/list", token).json()
+                if not isinstance(listed, list) or any(
+                        not isinstance(item, dict) or "id" not in item for item in listed):
+                    die("cannot confirm function absence from server response")
+                missing = not any(item["id"] == item_id for item in listed)
             if r.status_code == 200:
                 existing = r.json()
                 payload = self._build_update_payload(existing, item_id, content_body if self.meta_parser == "frontmatter" else content, meta)
                 r = _post(c, url, f"{self.item_path(item_id)}/update", token, payload)
-                old_ver = (existing.get("meta") or {}).get("manifest", {}).get("version", "")
-                label = f"updated {item_id}"
-                if old_ver and version:
-                    label += f" {old_ver} -> {version}"
-                out(label)
-            else:
+                receipt(self.name, "deploy", item_id, action="updated")
+            elif missing:
                 payload = self._build_create_payload(item_id, title, content_body if self.meta_parser == "frontmatter" else content, meta)
                 r = _post(c, url, f"{self.prefix}/create", token, payload)
-                out(f"created {item_id}" + (f" v{version}" if version else ""))
+                receipt(self.name, "deploy", item_id, action="created")
+            else:
+                r.raise_for_status()
 
     def _build_update_payload(self, existing, item_id, content, meta):
         return {
@@ -331,7 +427,7 @@ class Resource:
                     continue
                 r.raise_for_status()
                 item = r.json()
-                item_dir = os.path.join(out_dir, item_id)
+                item_dir = os.path.join(out_dir, _export_name(item_id))
                 # Write source
                 content = item.pop(self.content_key, "")
                 _write_file(os.path.join(item_dir, src_name), content if content.endswith("\n") else content + "\n")
@@ -348,9 +444,8 @@ class Resource:
             if r.status_code == 404:
                 die(f"{self.name} '{item_id}' not found")
             r.raise_for_status()
-            name = r.json().get("name", item_id)
             _delete(c, url, f"{self.item_path(item_id)}/delete", token)
-        out(f"deleted {name} ({item_id})")
+        receipt(self.name, "delete", item_id)
 
     def get_commands(self) -> dict[str, tuple]:
         return self._commands
@@ -391,11 +486,10 @@ def _valves_spec(url, token, kind, item_id, scope=""):
     out(r.json())
 
 def _valves_set(url, token, kind, item_id, json_path, scope=""):
-    with open(json_path) as f:
-        payload = json.load(f)
+    payload = _read_json(json_path)
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}/update", token, payload)
-    out(r.json())
+    receipt(kind, "valves-user-set" if scope else "valves-set", item_id)
 
 def _valves_set_field(url, token, kind, item_id, key, value, scope=""):
     """Set a single field. Value is parsed as JSON; falls back to string."""
@@ -407,7 +501,7 @@ def _valves_set_field(url, token, kind, item_id, key, value, scope=""):
         current = _get(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}", token).json()
         current[key] = parsed
         r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}/update", token, current)
-    out(r.json())
+    receipt(kind, "valves-user-set-field" if scope else "valves-set-field", item_id, field=key)
 
 def _valves_unset_field(url, token, kind, item_id, key, scope=""):
     with httpx.Client(timeout=TIMEOUT) as c:
@@ -416,7 +510,7 @@ def _valves_unset_field(url, token, kind, item_id, key, scope=""):
             die(f"key '{key}' not found in valves")
         del current[key]
         r = _post(c, url, f"/api/v1/{kind}/id/{item_id}/valves{scope}/update", token, current)
-    out(r.json())
+    receipt(kind, "valves-user-unset-field" if scope else "valves-unset-field", item_id, field=key)
 
 # Wrappers — admin/global valves (unprefixed: the common case)
 def tools_valves_get(url, token, item_id):                  _valves_get(url, token, "tools", item_id)
@@ -452,14 +546,14 @@ def functions_toggle(url, token, item_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, f"/api/v1/functions/id/{item_id}/toggle", token)
     f = r.json()
-    out(f"{item_id} {'active' if f.get('is_active') else 'inactive'}")
+    receipt("functions", "toggle", item_id, active=bool(f.get("is_active")))
 
 def functions_toggle_global(url, token, item_id):
     """Toggle a function's is_global flag (applies to all models)."""
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, f"/api/v1/functions/id/{item_id}/toggle/global", token)
     f = r.json()
-    out(f"{item_id} {'global' if f.get('is_global') else 'not global'}")
+    receipt("functions", "toggle-global", item_id, is_global=bool(f.get("is_global")))
 
 
 class SkillsResource(Resource):
@@ -527,7 +621,7 @@ class SkillsResource(Resource):
                     continue
                 r.raise_for_status()
                 item = r.json()
-                item_dir = os.path.join(out_dir, item_id)
+                item_dir = os.path.join(out_dir, _export_name(item_id))
                 # Write skill.md with frontmatter
                 content = item.pop("content", "")
                 fm = f"---\nid: {item_id}\nname: {item.get('name','')}\ndescription: {item.get('description','')}\n---\n"
@@ -543,7 +637,7 @@ class SkillsResource(Resource):
         with httpx.Client(timeout=TIMEOUT) as c:
             r = _post(c, url, f"{self.item_path(skill_id)}/toggle", token)
         s = r.json()
-        out(f"{skill_id} {'active' if s.get('is_active') else 'inactive'}")
+        receipt("skills", "toggle", skill_id, active=bool(s.get("is_active")))
 
     def cmd_grant(self, url: str, token: str, skill_id: str, ptype: str, pid: str, perm: str):
         if ptype not in ("user", "group"):
@@ -559,7 +653,7 @@ class SkillsResource(Resource):
             grants.append({"resource_type": "skill", "resource_id": skill_id,
                           "principal_type": ptype, "principal_id": pid, "permission": perm})
             _post(c, url, f"{self.item_path(skill_id)}/access/update", token, {"access_grants": grants})
-        out(f"granted {perm} on {skill_id} to {ptype}:{pid}")
+        receipt("skills", "grant", skill_id)
 
     def cmd_revoke(self, url: str, token: str, skill_id: str):
         with httpx.Client(timeout=TIMEOUT) as c:
@@ -569,7 +663,7 @@ class SkillsResource(Resource):
             r.raise_for_status()
             n = len(r.json().get("access_grants") or [])
             _post(c, url, f"{self.item_path(skill_id)}/access/update", token, {"access_grants": []})
-        out(f"revoked {n} grant(s) from {skill_id}")
+        receipt("skills", "revoke", skill_id, count=n)
 
 
 skills_res = SkillsResource()
@@ -626,7 +720,13 @@ def _inline_sibling_images(json_path: str, payload: dict) -> list[str]:
     ref = (meta or {}).get("profile_image_url")
     if not isinstance(ref, str) or not ref or ref.startswith(("data:", "http://", "https://", "/")):
         return inlined
+    if json_path == "-":
+        die("stdin model input requires a URL or data URI for profile_image_url")
+    if ref != os.path.basename(ref) or "\\" in ref:
+        die("profile image must be a bare sibling filename")
     image_path = os.path.join(os.path.dirname(os.path.abspath(json_path)), ref)
+    if os.path.islink(image_path):
+        die("profile image must not be a symlink")
     ext = os.path.splitext(ref)[1].lstrip(".").lower()
     mime = _MIME_BY_EXT.get(ext)
     if mime and os.path.isfile(image_path):
@@ -638,26 +738,24 @@ def _inline_sibling_images(json_path: str, payload: dict) -> list[str]:
 
 
 def models_create(url, token, json_path):
-    with open(json_path) as f:
-        payload = json.load(f)
-    inlined = _inline_sibling_images(json_path, payload)
+    payload = _read_json(json_path)
+    _inline_sibling_images(json_path, payload)
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, "/api/v1/models/create", token, payload)
     m = r.json()
-    out(f"created {m.get('id')}" + (f" (inlined {', '.join(inlined)})" if inlined else ""))
+    receipt("models", "create", m.get("id"))
 
 def models_update(url, token, json_path):
-    with open(json_path) as f:
-        payload = json.load(f)
-    inlined = _inline_sibling_images(json_path, payload)
+    payload = _read_json(json_path)
+    _inline_sibling_images(json_path, payload)
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, "/api/v1/models/model/update", token, payload)
-    out(f"updated {r.json().get('id')}" + (f" (inlined {', '.join(inlined)})" if inlined else ""))
+    receipt("models", "update", payload.get("id"))
 
 def models_delete(url, token, model_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, "/api/v1/models/model/delete", token, {"id": model_id})
-    out(f"deleted {model_id}")
+    receipt("models", "delete", model_id)
 
 def _models_fetch(c, url, token, model_id):
     """Fetch a model by ID, returning the parsed JSON (flat ModelModel shape)."""
@@ -692,8 +790,7 @@ def models_set_tools(url, token, model_id, *tool_ids):
         # OWUI binds per-model tools via meta.toolIds.
         form["meta"]["toolIds"] = ids
         r = _post(c, url, "/api/v1/models/model/update", token, form)
-    label = ", ".join(ids) if ids else "(none)"
-    out(f"tools for {model_id}: {label}")
+    receipt("models", "set-tools", model_id)
 
 def models_set_filters(url, token, model_id, *filter_ids):
     """Set the filter bindings for a workspace model (pass no IDs to clear)."""
@@ -705,8 +802,7 @@ def models_set_filters(url, token, model_id, *filter_ids):
         # (see backend/open_webui/utils/filter.py).
         form["meta"]["filterIds"] = ids
         r = _post(c, url, "/api/v1/models/model/update", token, form)
-    label = ", ".join(ids) if ids else "(none)"
-    out(f"filters for {model_id}: {label}")
+    receipt("models", "set-filters", model_id)
 
 
 def models_pull_all(url, token, out_dir="."):
@@ -734,7 +830,7 @@ def models_pull_all(url, token, out_dir="."):
             # Fetch full model data
             r = _get(c, url, f"/api/v1/models/model?id={model_id}", token)
             model = r.json()
-            model_dir = os.path.join(out_dir, model_id)
+            model_dir = os.path.join(out_dir, _export_name(model_id))
 
             # Extract profile image from data URI (top-level meta, not info.meta)
             top_meta = model.get("meta") or {}
@@ -800,22 +896,22 @@ def knowledge_files(url, token, kb_id):
 def knowledge_create(url, token, name, description=""):
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, "/api/v1/knowledge/create", token, {"name": name, "description": description})
-    out(f"created {r.json().get('id')}")
+    receipt("knowledge", "create", r.json().get("id"))
 
 def knowledge_delete(url, token, kb_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _delete(c, url, f"/api/v1/knowledge/{kb_id}/delete", token)
-    out(f"deleted {kb_id}")
+    receipt("knowledge", "delete", kb_id)
 
 def knowledge_add_file(url, token, kb_id, file_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, f"/api/v1/knowledge/{kb_id}/file/add", token, {"file_id": file_id})
-    out(f"added {file_id} to {kb_id}")
+    receipt("knowledge", "add-file", kb_id)
 
 def knowledge_remove_file(url, token, kb_id, file_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, f"/api/v1/knowledge/{kb_id}/file/remove", token, {"file_id": file_id})
-    out(f"removed {file_id} from {kb_id} (file destroyed)")
+    receipt("knowledge", "remove-file", kb_id, file_destroyed=True)
 
 
 # ── files ─────────────────────────────────────────────────────────────
@@ -864,12 +960,12 @@ def files_upload(url, token, path, mime_type=""):
         r = c.post(_api(url, "/api/v1/files/"), headers={"Authorization": f"Bearer {token}"},
                    files={"file": (filename, data, mime_type)})
         r.raise_for_status()
-    out(f"uploaded {filename} -> {r.json().get('id')}")
+    receipt("files", "upload", r.json().get("id"))
 
 def files_delete(url, token, file_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _delete(c, url, f"/api/v1/files/{file_id}", token)
-    out(f"deleted {file_id}")
+    receipt("files", "delete", file_id)
 
 
 # ── groups (special: /id/{id} pattern, members subresource) ──────────
@@ -896,12 +992,12 @@ def groups_show(url, token, group_id):
 def groups_create(url, token, name, description=""):
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, "/api/v1/groups/create", token, {"name": name, "description": description})
-    out(f"created {r.json().get('id')}")
+    receipt("groups", "create", r.json().get("id"))
 
 def groups_delete(url, token, group_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _delete(c, url, f"/api/v1/groups/id/{group_id}/delete", token)
-    out(f"deleted {group_id}")
+    receipt("groups", "delete", group_id)
 
 def groups_members(url, token, group_id):
     with httpx.Client(timeout=TIMEOUT) as c:
@@ -913,19 +1009,18 @@ def groups_members(url, token, group_id):
 def groups_add_user(url, token, group_id, user_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, f"/api/v1/groups/id/{group_id}/users/add", token, {"user_ids": [user_id]})
-    out(f"added {user_id} to {group_id}")
+    receipt("groups", "add-user", group_id)
 
 def groups_remove_user(url, token, group_id, user_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, f"/api/v1/groups/id/{group_id}/users/remove", token, {"user_ids": [user_id]})
-    out(f"removed {user_id} from {group_id}")
+    receipt("groups", "remove-user", group_id)
 
 def groups_update(url, token, group_id, json_path):
-    with open(json_path) as f:
-        payload = json.load(f)
+    payload = _read_json(json_path)
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, f"/api/v1/groups/id/{group_id}/update", token, payload)
-    out(f"updated {group_id}")
+    receipt("groups", "update", group_id)
 
 
 # ── users ─────────────────────────────────────────────────────────────
@@ -981,20 +1076,19 @@ def users_show(url, token, id_or_email):
 def users_add(url, token, email, name, role="user"):
     if role not in ("user", "admin"): die("role must be user or admin")
     with httpx.Client(timeout=TIMEOUT) as c:
-        r = _post(c, url, "/api/v1/auths/add", token, {"email": email, "name": name, "role": role, "password": "placeholder-no-login"})
-    out(f"created {r.json().get('id')} {email}")
+        r = _post(c, url, "/api/v1/auths/add", token, {"email": email, "name": name, "role": role, "password": secrets.token_urlsafe(48)})
+    receipt("users", "add", r.json().get("id"))
 
 def users_delete(url, token, user_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _delete(c, url, f"/api/v1/users/{user_id}", token)
-    out(f"deleted {user_id}")
+    receipt("users", "delete", user_id)
 
 def users_update(url, token, user_id, json_path):
-    with open(json_path) as f:
-        payload = json.load(f)
+    payload = _read_json(json_path)
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, f"/api/v1/users/{user_id}/update", token, payload)
-    out(f"updated {user_id}")
+    receipt("users", "update", user_id)
 
 
 # ── chats (special: tree structure) ──────────────────────────────────
@@ -1072,7 +1166,7 @@ def chats_show(url, token, chat_id):
 def chats_delete(url, token, chat_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _delete(c, url, f"/api/v1/chats/{chat_id}", token)
-    out(f"deleted {chat_id}")
+    receipt("chats", "delete", chat_id)
 
 
 _STREAM_TIMEOUT = httpx.Timeout(TIMEOUT, read=3600.0)
@@ -1124,12 +1218,12 @@ def chats_all(url, token):
 
 def chats_pull_all(url, token, out_dir="chats"):
     count = 0
-    os.makedirs(out_dir, exist_ok=True)
+    _private_dir(os.path.abspath(out_dir))
     for chat in _iter_chats_all(url, token):
         chat_id = chat.get("id", "")
         if not chat_id:
             continue
-        _write_json(os.path.join(out_dir, f"{chat_id}.json"), chat)
+        _write_json(os.path.join(out_dir, f"{_export_name(chat_id)}.json"), chat)
         count += 1
         if count % 100 == 0:
             print(f"... {count}", file=sys.stderr)
@@ -1173,11 +1267,10 @@ def configs_get(url, token, section):
     out(r.json())
 
 def configs_set(url, token, section, json_path):
-    with open(json_path) as f:
-        payload = json.load(f)
+    payload = _read_json(json_path)
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, f"/api/v1/configs/{section}", token, payload)
-    out(f"updated {section}")
+    receipt("configs", "set", section)
 
 def configs_admin(url, token):
     with httpx.Client(timeout=TIMEOUT) as c:
@@ -1185,11 +1278,10 @@ def configs_admin(url, token):
     out(r.json())
 
 def configs_admin_set(url, token, json_path):
-    with open(json_path) as f:
-        payload = json.load(f)
+    payload = _read_json(json_path)
     with httpx.Client(timeout=TIMEOUT) as c:
         _post(c, url, "/api/v1/auths/admin/config", token, payload)
-    out("updated admin config")
+    receipt("configs", "admin-set")
 
 
 # ── prompts ──────────────────────────────────────────────────────────
@@ -1213,16 +1305,15 @@ def prompts_show(url, token, prompt_id):
             ("title", p.get("title","")), ("content", f"{len(p.get('content',''))} chars")])
 
 def prompts_create(url, token, json_path):
-    with open(json_path) as f:
-        payload = json.load(f)
+    payload = _read_json(json_path)
     with httpx.Client(timeout=TIMEOUT) as c:
         r = _post(c, url, "/api/v1/prompts/create", token, payload)
-    out(f"created {r.json().get('id')}")
+    receipt("prompts", "create", r.json().get("id"))
 
 def prompts_delete(url, token, prompt_id):
     with httpx.Client(timeout=TIMEOUT) as c:
         _delete(c, url, f"/api/v1/prompts/id/{prompt_id}/delete", token)
-    out(f"deleted {prompt_id}")
+    receipt("prompts", "delete", prompt_id)
 
 
 # ── schema introspection ─────────────────────────────────────────────
@@ -1362,8 +1453,24 @@ COMMANDS.update({
 })
 
 
+def _valves_field_file(kind, scope):
+    def command(url, token, item_id, key, path):
+        _valves_set_field(url, token, kind, item_id, key, _read_text(path), scope)
+    return command
+
+
+for _kind in ("tools", "functions"):
+    for _scope in ("", "/user"):
+        _command = "valves-user-set-field-file" if _scope else "valves-set-field-file"
+        COMMANDS[(_kind, _command)] = (
+            _valves_field_file(_kind, _scope), "<id> <key> <value-file|->", (3, 3))
+
+
 def cmd_help():
     """Print all commands grouped by resource."""
+    print("Usage: owui-cli [--json] <resource> <command> [args]")
+    print("Mutations emit safe receipts. Reads may disclose secrets. JSON files accept '-' for stdin.")
+    print("Auth: OWUI_URL and OWUI_TOKEN or OWUI_TOKEN_FILE. Global flags precede the resource.")
     # Group by resource preserving insertion order
     resources = {}
     for (res, cmd), (_, arg_spec, _) in COMMANDS.items():
@@ -1373,16 +1480,17 @@ def cmd_help():
             print(f"  {res:<12} {cmd:<15} {arg_spec}")
 
 
-def main():
+def _main():
     global JSON_OUTPUT
     args = sys.argv[1:]
 
-    # Extract --json flag
-    if "--json" in args:
+    JSON_OUTPUT = False
+    # Only parse leading options: a field value '--json' is data.
+    if args and args[0] == "--json":
         JSON_OUTPUT = True
-        args.remove("--json")
+        args.pop(0)
 
-    if "--version" in args:
+    if args == ["--version"]:
         print(f"owui-cli {owui_cli.__version__}")
         return
 
@@ -1402,7 +1510,6 @@ def main():
         cmd_help()
         sys.exit(1)
 
-    url, token = _env()
     resource, command = args[0], args[1]
     key = (resource, command)
 
@@ -1411,8 +1518,8 @@ def main():
     if key not in COMMANDS:
         plural = resource + "s"
         if (plural, command) in COMMANDS:
-            die(f"resources are plural: use '{plural} {command}' not '{resource} {command}'")
-        die(f"unknown: {resource} {command}")
+            die("resources are plural; see 'owui-cli help'")
+        die("unknown command; see 'owui-cli help'")
 
     fn, arg_spec, (min_args, max_args) = COMMANDS[key]
     rest = args[2:]
@@ -1420,12 +1527,22 @@ def main():
     if not (min_args <= len(rest) <= max_args):
         die(f"usage: owui-cli {resource} {command} {arg_spec}")
 
+    url, token = _env()
+    fn(url, token, *rest)
+
+
+def main():
+    """Do not let server bodies, URLs, input values, or exception reprs reach logs."""
     try:
-        fn(url, token, *rest)
+        _main()
     except httpx.HTTPStatusError as e:
-        die(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
-    except FileNotFoundError as e:
-        die(f"file not found: {e}")
+        die(f"HTTP {e.response.status_code}: request failed (response body withheld)")
+    except httpx.RequestError:
+        die("network request failed (details withheld); mutation outcome may be unknown")
+    except (OSError, UnicodeError):
+        die("local I/O or text decoding failed (details withheld)")
+    except Exception:
+        die("command failed (details withheld); check input and server compatibility")
 
 
 if __name__ == "__main__":
