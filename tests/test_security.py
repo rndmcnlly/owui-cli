@@ -198,11 +198,19 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(cli._export_name("../org/model"), "..%2Forg%2Fmodel")
         target = self.root / "export" / "data.json"
         cli._write_json(str(target), {"secret": SIBLING})
-        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
+        self.assertIn(SIBLING, target.read_text())
+        image = self.root / "image.png"
+        cli._write_file(str(image), b"\x00\x0a\x0d\x1a\xff")
+        self.assertEqual(image.read_bytes(), b"\x00\x0a\x0d\x1a\xff")
+        if os.name == "posix":
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
+        for source, expected in (("CON", "%43ON"), ("nul.txt", "%6Eul.txt"),
+                                 ("trailing.", "trailing%2E"), ("a%2Fb", "a%252Fb")):
+            self.assertEqual(cli._export_name(source), expected)
         link = self.root / "link"
         link.symlink_to(target)
-        with self.assertRaises(OSError):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             cli._write_file(str(link), "overwrite")
         hard = self.root / "hard"
         os.link(target, hard)
@@ -213,10 +221,11 @@ class SecurityTests(unittest.TestCase):
         symlink_dir.symlink_to(target.parent, target_is_directory=True)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             cli._write_file(str(symlink_dir / "new"), "overwrite")
-        fifo = self.root / "fifo"
-        os.mkfifo(fifo)
-        with self.assertRaises(OSError):
-            cli._write_file(str(fifo), "overwrite")
+        if hasattr(os, "mkfifo"):
+            fifo = self.root / "fifo"
+            os.mkfifo(fifo)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                cli._write_file(str(fifo), "overwrite")
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             cli._inline_sibling_images(str(self.body), {"meta": {"profile_image_url": "../private.png"}})
         self.assertIsNone(cli._extract_data_uri("data:image/../../bad;base64,eA=="))

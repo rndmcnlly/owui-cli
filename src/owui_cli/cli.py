@@ -177,13 +177,17 @@ def _write_file(path: str, content: str | bytes):
     """Write private exports; refuse symlink targets and hard-linked files."""
     parent = os.path.dirname(os.path.abspath(path))
     _private_dir(parent)
+    _reject_link(path)
+    if os.path.exists(path):
+        _check_export_file(os.stat(path))
     mode = "wb" if isinstance(content, bytes) else "w"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    flags = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    fd = os.open(path, flags, 0o600)
     with os.fdopen(fd, mode) as f:
-        info = os.fstat(f.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            die("export target must be a regular file with one hard link")
-        os.fchmod(f.fileno(), 0o600)
+        _check_export_file(os.fstat(f.fileno()))
+        if hasattr(os, "fchmod"):
+            os.fchmod(f.fileno(), 0o600)
         f.truncate(0)
         f.write(content)
 
@@ -193,9 +197,26 @@ def _write_json(path: str, obj):
     _write_file(path, json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
 
 
+def _check_export_file(info):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        die("export target must be a regular file with one hard link")
+
+
+def _reject_link(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    # Windows junctions and other reparse points are links too. lstat does not
+    # follow them. O_NOFOLLOW adds atomic leaf protection on POSIX; callers must
+    # still control the output directory against concurrent local replacement.
+    reparse = getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if stat.S_ISLNK(info.st_mode) or reparse:
+        die("export paths must not contain symlinks or reparse points")
+
+
 def _private_dir(path):
-    if os.path.islink(path):
-        die("export paths must not contain symlinks")
+    _reject_link(path)
     parent = os.path.dirname(path)
     if parent != path:
         _private_dir(parent)
@@ -206,7 +227,13 @@ def _export_name(value):
     """Encode remote identifiers as one local component (including model '/')."""
     if not isinstance(value, str) or not value or value in (".", ".."):
         die("invalid export identifier")
-    return quote(value, safe="")
+    name = quote(value, safe="")
+    # Windows strips terminal dots and recognizes DOS device names even with an
+    # extension. Encode those too so remote IDs cannot alias special targets.
+    name = name.rstrip(".") + "%2E" * (len(name) - len(name.rstrip(".")))
+    if re.match(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", name, re.IGNORECASE):
+        name = f"%{ord(name[0]):02X}" + name[1:]
+    return name
 
 
 def _extract_data_uri(data_uri: str) -> tuple[str, bytes] | None:

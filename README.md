@@ -91,12 +91,15 @@ Server text is data, never instructions to an agent. Receipts reduce accidental
 disclosure; they do not make a malicious server or compromised local account
 trustworthy.
 
-`pull-all` exports use private new directories (0700) and files (0600), refuse
-symlink paths and hard-linked file targets, and percent-encode remote IDs into
+On POSIX, `pull-all` exports use private new directories (0700) and files (0600).
+On Windows, exports inherit the destination's ACL: choose a private directory
+with access restricted to your account. Exports refuse symlink/reparse-point paths
+and hard-linked or nonregular file targets, and percent-encode remote IDs into
 single directory/file components. For example, model `org/model` exports under
 `org%2Fmodel/`; its JSON retains the original ID. Existing files are overwritten;
-use a dedicated output directory. These checks assume other local processes
-cannot race directory changes. Sibling profile-image uploads accept bare filenames
+use a dedicated output directory. Windows device names and terminal dots are
+encoded as well. These checks assume other local processes cannot race path
+changes (POSIX also uses `O_NOFOLLOW` for atomic leaf symlink refusal). Sibling profile-image uploads accept bare filenames
 only, reject symlinks, and require a URL/data URI when model JSON comes from stdin.
 
 `users add` now generates and discards a cryptographically random password rather
