@@ -11,7 +11,7 @@ Bump both when cutting a release.
 
 ## Publishing
 
-Every push to `main` auto-publishes to PyPI via GitHub Actions trusted publishing. Bump the version before pushing, and don't push broken code to main.
+Every push to `main` runs the tests and, if they pass and the version in `pyproject.toml` is not yet on PyPI, publishes it via GitHub Actions trusted publishing (`.github/workflows/publish.yml`). A push without a version bump is tested but not released. Bump the version to release, and don't push broken code to main.
 
 ## Local development install
 

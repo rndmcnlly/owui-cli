@@ -5,12 +5,29 @@ on:
     branches: [main]
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv build
-      - run: uv publish --trusted-publishing always
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Publish only on a version bump: PyPI rejects re-uploads, so a push
+      # that keeps the version (docs, CI) would otherwise fail this job.
+      - id: version
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+          if curl -sf -o /dev/null "https://pypi.org/pypi/owui-cli/$v/json"; then
+            echo "owui-cli $v already on PyPI; skipping publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.skip != 'true'
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - if: steps.version.outputs.skip != 'true'
+        run: uv build
+      - if: steps.version.outputs.skip != 'true'
+        run: uv publish --trusted-publishing always
