@@ -218,12 +218,13 @@ def _reject_link(path):
 def _private_dir(path):
     # Root-owned directory symlinks are system layout (macOS /tmp -> private/tmp,
     # /var -> private/var); anyone able to plant one already owns the machine.
+    # POSIX only: Windows reports st_uid 0 for every file.
     try:
         info = os.lstat(path)
     except FileNotFoundError:
         info = None
-    if not (info and stat.S_ISLNK(info.st_mode) and info.st_uid == 0
-            and os.path.isdir(path)):
+    if not (os.name == "posix" and info and stat.S_ISLNK(info.st_mode)
+            and info.st_uid == 0 and os.path.isdir(path)):
         _reject_link(path)
     parent = os.path.dirname(path)
     if parent != path:
