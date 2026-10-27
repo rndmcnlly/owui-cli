@@ -221,6 +221,10 @@ class SecurityTests(unittest.TestCase):
         symlink_dir.symlink_to(target.parent, target_is_directory=True)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             cli._write_file(str(symlink_dir / "new"), "overwrite")
+        if os.path.islink("/tmp") and os.lstat("/tmp").st_uid == 0:
+            # macOS: /tmp is a root-owned system symlink; exports beneath it work.
+            with tempfile.TemporaryDirectory(dir="/tmp") as sys_tmp:
+                cli._write_file(os.path.join(sys_tmp, "out", "x.json"), "ok")
         if hasattr(os, "mkfifo"):
             fifo = self.root / "fifo"
             os.mkfifo(fifo)
