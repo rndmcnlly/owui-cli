@@ -1110,24 +1110,64 @@ def chats_search(url, token, query, page="1"):
             for ch in items]
     out_table(rows, [("CHAT_ID","id",36), ("TITLE","title",50)])
 
-def chats_show(url, token, chat_id):
-    with httpx.Client(timeout=TIMEOUT) as c:
-        r = c.get(_api(url, f"/api/v1/chats/{chat_id}"), headers=_headers(token))
-        if r.status_code == 404: die(f"chat '{chat_id}' not found")
-        r.raise_for_status()
-    chat = r.json()
-    if JSON_OUTPUT:
-        out(chat)
-        return
+def _fetch_chat(c, url, token, chat_id):
+    """GET one chat; None when missing or unreadable (OWUI answers 401 for
+    unknown ids) so tree walks can report dangling links."""
+    r = c.get(_api(url, f"/api/v1/chats/{quote(chat_id, safe='')}"), headers=_headers(token))
+    if r.status_code in (401, 403, 404):
+        return None
+    r.raise_for_status()
+    return r.json()
+
+
+def _subagent_links(chat):
+    """[(parent_message_id, child_chat_id)] from delegate_task links in message meta.
+
+    OWUI 0.12 writes these only for background delegations, on the completion
+    message it injects into the parent: one child as meta.subagent_chat_id,
+    several as meta.subagent_chat_ids. Foreground delegations leave no forward
+    link at all; see _discover_children.
+    """
+    links = []
+    msgs = chat.get("chat", {}).get("history", {}).get("messages", {})
+    for mid, msg in msgs.items():
+        meta = msg.get("meta") or {}
+        ids = list(meta.get("subagent_chat_ids") or [])
+        if meta.get("subagent_chat_id"):
+            ids.insert(0, meta["subagent_chat_id"])
+        for child_id in dict.fromkeys(ids):
+            if isinstance(child_id, str):
+                links.append((mid, child_id))
+    return links
+
+
+def _subagent_parent(chat):
+    """Back-link stored on a child chat's row meta, or None for ordinary chats."""
+    meta = chat.get("meta") or {}
+    if meta.get("internal") is True and meta.get("type") == "subagent":
+        return meta
+    return None
+
+
+def _print_chat(chat, pad="", subagents=None):
+    """Render a message tree. subagents maps message id -> child tree nodes."""
     inner = chat.get("chat", {})
     history = inner.get("history", {})
     msgs = history.get("messages", {})
     current = history.get("currentId", "")
+    links = {}
+    for mid, child_id in _subagent_links(chat):
+        links.setdefault(mid, []).append(child_id)
 
-    print(f"chat: {inner.get('title','(untitled)')}")
-    print(f"id: {chat_id}")
-    print(f"models: {', '.join(inner.get('models',[])) or '?'}")
-    print(f"nodes: {len(msgs)}")
+    print(f"{pad}chat: {inner.get('title','(untitled)')}")
+    print(f"{pad}id: {chat.get('id','')}")
+    parent = _subagent_parent(chat)
+    if parent:
+        print(f"{pad}parent: {parent.get('parent_chat_id','?')} "
+              f"(msg {str(parent.get('parent_message_id',''))[:8]}, "
+              f"{parent.get('delegation_id','?')}, {parent.get('mode','?')})")
+    print(f"{pad}models: {', '.join(inner.get('models',[])) or '?'}")
+    print(f"{pad}nodes: {len(msgs)}")
     if not msgs:
         return
 
@@ -1148,7 +1188,7 @@ def chats_show(url, token, chat_id):
         # Strip tool call details blocks
         display = re.sub(r"<details[^>]*>.*?</details>", "", content, flags=re.DOTALL).strip()
         display = re.sub(r"\n{3,}", "\n\n", display)
-        indent = "  " * depth
+        indent = pad + "  " * depth
         marker = " *" if nid == current else ""
         branch = f" [{len(kids)}br]" if len(kids) > 1 else ""
         print(f"{indent}--- {role.upper()}{marker}{branch} ({nid[:8]})")
@@ -1157,11 +1197,137 @@ def chats_show(url, token, chat_id):
                 print(f"{indent}  {line}")
             if len(display) > 300:
                 print(f"{indent}  ...({len(display)} chars)")
+        if subagents is None:
+            for child_id in links.get(nid, []):
+                print(f"{indent}  [sub-agent chat {child_id}]")
+        else:
+            for node in subagents.get(nid, []):
+                print(f"{indent}  >>> SUB-AGENT {node['delegation_id'] or '?'} ({node['mode'] or '?'})")
+                if node["chat"] is None:
+                    print(f"{indent}    chat {node['chat_id']}: not found or not readable")
+                else:
+                    _print_chat(node["chat"], indent + "    ", _tree_by_message(node))
+                print(f"{indent}  <<< END SUB-AGENT")
         for kid in kids:
             walk(kid, depth + (1 if len(kids) > 1 else 0))
 
     for root in roots:
         walk(root)
+
+
+def chats_show(url, token, chat_id):
+    with httpx.Client(timeout=TIMEOUT) as c:
+        chat = _fetch_chat(c, url, token, chat_id)
+    if chat is None: die(f"chat '{chat_id}' not found or not readable")
+    if JSON_OUTPUT:
+        out(chat)
+        return
+    _print_chat(chat)
+
+
+def _delegation_windows(chat):
+    """[(model_id, start, end)] around each assistant turn that called delegate_task.
+
+    A child chat is inserted while the call runs, so its first messages fall
+    between the calling turn's timestamp and the next message in the parent.
+    """
+    msgs = chat.get("chat", {}).get("history", {}).get("messages", {}).values()
+    stamps = sorted(m.get("timestamp") or 0 for m in msgs)
+    windows = []
+    for msg in msgs:
+        calls = [o for o in msg.get("output") or []
+                 if isinstance(o, dict) and o.get("type") == "function_call"
+                 and o.get("name") == "delegate_task"]
+        if msg.get("role") != "assistant" or not calls or not msg.get("model"):
+            continue
+        t0 = msg.get("timestamp") or 0
+        later = [t for t in stamps if t > t0]
+        windows.append((msg["model"], t0 - 5, (later[0] if later else int(time.time())) + 5))
+    return windows
+
+
+def _discover_children(c, url, token, chat, warnings):
+    """Candidate child chat ids for one parent, unverified.
+
+    Chat listings hide internal chats, and nothing exposes OWUI's own
+    parent_chat_id lookup, so foreground children are only reachable through
+    the admin analytics message log (chat_message rows, unfiltered). The
+    window also catches unrelated chats on the same model; callers must
+    check each candidate's back-link.
+    """
+    ids = {}
+    for model_id, start, end in _delegation_windows(chat):
+        skip = 0
+        while True:
+            r = c.get(_api(url, "/api/v1/analytics/messages"), headers=_headers(token),
+                      params={"model_id": model_id, "start_date": start, "end_date": end,
+                              "skip": skip, "limit": 100})
+            if r.status_code in (401, 403, 404):
+                warnings.append("analytics unavailable (needs admin and ENABLE_ADMIN_ANALYTICS); "
+                                "foreground sub-agents not discovered")
+                return list(ids)
+            r.raise_for_status()
+            rows = r.json()
+            for row in rows:
+                ids[row.get("chat_id")] = True
+            if len(rows) < 100:
+                break
+            skip += 100
+    ids.pop(chat.get("id"), None)
+    ids.pop(None, None)
+    return list(ids)
+
+
+def _subagent_tree(c, url, token, chat, seen, warnings):
+    """Children of one chat, recursively. OWUI 0.12 forbids nested
+    delegation, but walking generally (with a cycle guard) costs nothing.
+
+    Forward links are trusted; discovered candidates count only if their
+    back-link names this chat. The back-link's parent_message_id (the turn
+    that called delegate_task) places the child in the tree.
+    """
+    parent_id = chat.get("id")
+    forward = dict((child_id, mid) for mid, child_id in reversed(_subagent_links(chat)))
+    nodes = []
+    for child_id in [*forward, *_discover_children(c, url, token, chat, warnings)]:
+        if child_id in seen:
+            continue
+        child = _fetch_chat(c, url, token, child_id)
+        back = (_subagent_parent(child) or {}) if child else {}
+        if child_id not in forward and back.get("parent_chat_id") != parent_id:
+            continue
+        seen.add(child_id)
+        nodes.append({
+            "parent_message_id": back.get("parent_message_id") or forward.get(child_id),
+            "chat_id": child_id,
+            "delegation_id": back.get("delegation_id"),
+            "mode": back.get("mode"),
+            "chat": child,
+            "subagents": _subagent_tree(c, url, token, child, seen, warnings) if child else [],
+        })
+    return nodes
+
+
+def _tree_by_message(node):
+    by_msg = {}
+    for sub in node["subagents"]:
+        by_msg.setdefault(sub["parent_message_id"], []).append(sub)
+    return by_msg
+
+
+def chats_tree(url, token, chat_id):
+    with httpx.Client(timeout=TIMEOUT) as c:
+        chat = _fetch_chat(c, url, token, chat_id)
+        if chat is None: die(f"chat '{chat_id}' not found or not readable")
+        warnings = []
+        root = {"chat": chat, "subagents": _subagent_tree(c, url, token, chat, {chat_id}, warnings)}
+    warnings = list(dict.fromkeys(warnings))
+    if JSON_OUTPUT:
+        out({**root, "warnings": warnings})
+        return
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    _print_chat(chat, "", _tree_by_message(root))
 
 def chats_delete(url, token, chat_id):
     with httpx.Client(timeout=TIMEOUT) as c:
@@ -1431,6 +1597,7 @@ COMMANDS.update({
     ("chats",     "list"):        (chats_list,           "[page]",              (0, 1)),
     ("chats",     "search"):      (chats_search,         "<query> [page]",      (1, 2)),
     ("chats",     "show"):        (chats_show,           "<id>",                (1, 1)),
+    ("chats",     "tree"):        (chats_tree,           "<id>",                (1, 1)),
     ("chats",     "all"):         (chats_all,            "",                    (0, 0)),
     ("chats",     "pull-all"):    (chats_pull_all,       "[dir]",               (0, 1)),
     ("chats",     "stats"):       (chats_stats,          "[page]",              (0, 1)),

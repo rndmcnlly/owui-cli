@@ -131,6 +131,37 @@ and retain their read-oriented output. Deploy only creates after a 404, or for
 OWUI's missing-function 401 quirk, after a successful admin listing confirms
 absence. An unconfirmed authorization or server failure cannot trigger creation.
 
+## Sub-agent chats
+
+OWUI 0.12's `delegate_task` runs each delegation in its own child chat, titled
+`Sub-agent: <task>`. A child is an ordinary chat row marked internal, so
+`chats show <child-id>` works directly and prints the parent it came from.
+`chats tree <id>` shows a parent with every child nested under the assistant
+turn that dispatched it (`--json`: `{chat, subagents: [{parent_message_id,
+chat_id, delegation_id, mode, chat, subagents}], warnings}`).
+
+How OWUI links them, and how `tree` finds them:
+
+| Link | Where | Written for |
+| --- | --- | --- |
+| Back-link | child `meta`: `parent_chat_id`, `parent_message_id`, `delegation_id`, `mode` | every child |
+| Forward link | parent message `meta.subagent_chat_id(s)` on the injected `[ASYNC SUBAGENT COMPLETE]` message | background only |
+| None | the parent keeps only the summary string | foreground |
+
+Because foreground children have no forward link, and chat listings hide
+internal chats, `tree` searches the admin analytics message log
+(`/api/v1/analytics/messages`) for chats active on the calling turn's model
+while it ran, then keeps only those whose back-link names the parent. That
+needs an admin token and `ENABLE_ADMIN_ANALYTICS` (default on); without it,
+`tree` shows forward links only and emits a warning.
+
+The server already handles the rest: `chats list`/`search` never return child
+chats, and `chats delete <parent>` deletes its children too. Children carry the
+same untrusted tool output and possible secrets as their parents, so the export
+guidance above applies. Admins can read child chats even when
+`ENABLE_ADMIN_CHAT_ACCESS=false` (see
+[open-webui/docs#1486](https://github.com/open-webui/docs/issues/1486)).
+
 ## Development
 
 ```bash

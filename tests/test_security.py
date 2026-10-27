@@ -88,7 +88,7 @@ class SecurityTests(unittest.TestCase):
         # Explicit classification makes a new command require an audit decision.
         reads = {"list", "show", "pull", "pull-all", "valves", "valves-spec",
                  "valves-user", "valves-user-spec", "files", "members", "find",
-                 "search", "all", "stats", "get", "admin"}
+                 "search", "all", "stats", "get", "admin", "tree"}
         self.assertEqual(set(cli.COMMANDS) - set(cases),
                          {key for key in cli.COMMANDS if key[1] in reads})
         for (resource, operation), args in cases.items():
